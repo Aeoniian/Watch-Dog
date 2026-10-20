@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Watch Dog: a recovery plugin for Skua and VibeSkua.
+    It is compiled against Skua 1.4.5's interface assemblies (the lowest version it supports); VibeSkua 2.0.x has
+    everything it uses, so the same DLL loads in both. build.ps1 / build.sh download and build those assemblies
+    into .deps/lib. They are provided by the client at runtime and are not copied next to the plugin.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>WatchDog</AssemblyName>
+    <RootNamespace>WatchDog</RootNamespace>
+    <Version>1.0.0</Version>
+    <Product>Watch Dog</Product>
+    <Description>Recovery plugin for Skua and VibeSkua: stuck logins, disconnects, stuck scripts, script restarts and Rescue Allies.</Description>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <SkuaLib Condition="'$(SkuaLib)' == ''">$(MSBuildThisFileDirectory)..\.deps\lib</SkuaLib>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Skua.Core.Interfaces">
+      <HintPath>$(SkuaLib)\Skua.Core.Interfaces.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Skua.Core.Models">
+      <HintPath>$(SkuaLib)\Skua.Core.Models.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Skua.Core.Utils">
+      <HintPath>$(SkuaLib)\Skua.Core.Utils.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>
