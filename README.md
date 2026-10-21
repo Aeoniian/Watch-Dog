@@ -7,7 +7,8 @@ Watch Dog is the in-game part of [VibeSkuffle](https://github.com/Aeoniian/VibeS
 normal plugin. It needs no changes to your client: drop one file into the plugins folder.
 
 > **Status: beta.** Tested in Skua 1.4.5 and VibeSkua 2.0.2 (private rooms): logged-out relog, connection lost,
-> stuck login, stuck script and script restarts (both), Rescue Allies (VibeSkua). Report anything odd in [Issues](../../issues).
+> stuck login, stuck script and script restarts (both), Rescue Allies (VibeSkua, and a Skua account rescued by a
+> VibeSkua one). Report anything odd in [Issues](../../issues).
 
 ---
 

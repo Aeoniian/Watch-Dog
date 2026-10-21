@@ -30,7 +30,6 @@ internal sealed partial class Watchdog
     {
         _thread = new Thread(Loop) { IsBackground = true, Name = "Watch Dog" };
         _thread.Start();
-        Write(" started.");
     }
 
     public void Stop()
@@ -240,6 +239,8 @@ internal sealed partial class Watchdog
                 string u = _bot.Player.Username, p = _bot.Player.Password;
                 if (!string.IsNullOrWhiteSpace(u) && !string.IsNullOrEmpty(p))
                 {
+                    if (_user is null)
+                        Log.Write(u, " watching this account.");
                     _user = u;
                     _pass = p;
                     _who = u;
