@@ -8,7 +8,8 @@ normal plugin. It needs no changes to your client: drop one file into the plugin
 
 > **Status: beta.** Tested in Skua 1.4.5 and VibeSkua 2.0.2 (private rooms): logged-out relog, connection lost,
 > stuck login, stuck script and script restarts (both), Rescue Allies (VibeSkua, and a Skua account rescued by a
-> VibeSkua one). Report anything odd in [Issues](../../issues).
+> VibeSkua one). VibeSkua 2.0.6 asks for a script's options before starting it; Watch Dog's script restarts
+> use the saved options instead, so nothing waits on that window. Report anything odd in [Issues](../../issues).
 
 ---
 

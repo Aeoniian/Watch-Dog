@@ -138,7 +138,14 @@ internal sealed partial class Watchdog
                     return;
                 }
                 Write(attempt == 1 ? " back in game; starting the script again." : $" starting the script again (try {attempt} of 3).");
-                Exception? error = await _manager.StartScript();
+                // VibeSkua 2.0.6+ waits for the script's options window before starting a script; with nobody there
+                // it would wait forever. Use the saved options (the property only exists in newer clients).
+                System.Reflection.PropertyInfo? silentProp = _manager.GetType().GetProperty("SilentConfig");
+                object? silentBefore = null;
+                try { silentBefore = silentProp?.GetValue(_manager); silentProp?.SetValue(_manager, true); } catch { }
+                Exception? error;
+                try { error = await _manager.StartScript(); }
+                finally { try { if (silentBefore is not null) silentProp?.SetValue(_manager, silentBefore); } catch { } }
                 if (error is not null)
                 {
                     Write($" couldn't start the script: {error.Message}");
