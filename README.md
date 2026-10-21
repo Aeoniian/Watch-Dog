@@ -48,7 +48,9 @@ It logs back in on the **same server** the account was on (unless that server is
 When an account running a script keeps dying (10 deaths without a kill, or 15 minutes of only deaths), every other
 account on the same PC **and server** that is running a script and has *Rescue Allies* on stops its script, goes to
 that room and cell, and fights there. As soon as the stuck account gets a kill they go back to where they were and
-their scripts start again. They give up after 20 minutes. Skua, VibeSkua and VibeSkuffle accounts can help each other.
+their scripts start again. They give up after 20 minutes. If the boss is hidden behind a questline the helpers haven't done,
+they borrow the stuck account's quest progress while helping (client-side only) and put their own back exactly as it
+was afterwards, so their own scripts aren't fooled. Skua, VibeSkua and VibeSkuffle accounts can help each other.
 
 ### What it can't do
 A plugin lives inside the client, so it goes down with it. Watch Dog can't recover from the client itself

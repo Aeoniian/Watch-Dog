@@ -36,7 +36,79 @@ internal sealed partial class Watchdog
 
     private bool RescueActive => _rsHelping is not null;
 
-    private sealed record RescueCall(string User, string Server, string Room, string Cell, string Pad);
+    private sealed record RescueCall(string User, string Server, string Room, string Cell, string Pad, Dictionary<string, string> Quests);
+
+    // ---- quest progress --------------------------------------------------------------------------------
+    // A boss (or a whole map, cell or monster) can be hidden until a questline is done. The account asking for
+    // help sends its quest progress (the strQuests strings) with the call; a helper copies in every quest value
+    // that is higher (client-side only, the same way ButlerV5's quest clone works) so it can see the same boss.
+    // Its own values are saved first and put back exactly when the rescue ends, so its own script doesn't see
+    // quests as done that aren't. (After a relog the server sends the real values anyway.)
+
+    private static readonly string[] QuestFields =
+        { "strQuests", "strQuests2", "strQuests3", "strQuests4", "strQuests5", "strQuests6", "strQuests7", "strQuests8", "strQuests9" };
+
+    private Dictionary<string, string>? ReadQuestStrings()
+    {
+        try
+        {
+            string? json = _bot.Flash.GetGameObject("world.myAvatar.objData");
+            if (string.IsNullOrEmpty(json))
+                return null;
+            using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(json);
+            Dictionary<string, string> result = new();
+            foreach (string field in QuestFields)
+                if (doc.RootElement.TryGetProperty(field, out System.Text.Json.JsonElement el) && el.ValueKind == System.Text.Json.JsonValueKind.String)
+                    result[field] = el.GetString() ?? "";
+            return result.Count > 0 ? result : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void SetQuestStrings(Dictionary<string, string> strings)
+    {
+        foreach ((string field, string value) in strings)
+            try { _bot.Flash.SetGameObject($"world.myAvatar.objData.{field}", value); } catch { }
+    }
+
+    private static int QuestChar(char c) => c switch
+    {
+        >= '0' and <= '9' => c - '0',
+        >= 'A' and <= 'Z' => c - 'A' + 10,
+        >= 'a' and <= 'z' => c - 'a' + 36,
+        _ => 0,
+    };
+
+    /// <summary>Per slot (one character each) the higher of the two; length kept so slot positions don't move.</summary>
+    private static string MergeQuestString(string mine, string theirs)
+    {
+        System.Text.StringBuilder sb = new(Math.Max(mine.Length, theirs.Length));
+        for (int i = 0; i < Math.Max(mine.Length, theirs.Length); i++)
+        {
+            char a = i < mine.Length ? mine[i] : '0';
+            char b = i < theirs.Length ? theirs[i] : '0';
+            sb.Append(QuestChar(a) >= QuestChar(b) ? a : b);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Copies in the stuck account's higher quest values; returns how many strings changed.</summary>
+    private int BorrowQuests(Dictionary<string, string> own, Dictionary<string, string> theirs)
+    {
+        Dictionary<string, string> merged = new();
+        foreach ((string field, string value) in theirs)
+        {
+            string mine = own.TryGetValue(field, out string? m) ? m : "";
+            string result = MergeQuestString(mine, value);
+            if (result != mine)
+                merged[field] = result;
+        }
+        SetQuestStrings(merged);
+        return merged.Count;
+    }
 
     /// <summary>Called from the watchdog loop while in game.</summary>
     private void RescueTick(int now)
@@ -120,10 +192,20 @@ internal sealed partial class Watchdog
                 return;
             Directory.CreateDirectory(RescueDir);
             string file = RescueFile(user);
-            File.WriteAllLines(file + ".tmp", new[] { user, server, _bot.Map.FullName, _bot.Player.Cell, _bot.Player.Pad, DateTime.UtcNow.Ticks.ToString() });
+            File.WriteAllLines(file + ".tmp", RescueLines(new[] { user, server, _bot.Map.FullName, _bot.Player.Cell, _bot.Player.Pad, DateTime.UtcNow.Ticks.ToString() }));
             File.Move(file + ".tmp", file, true);
         }
         catch { }
+    }
+
+    /// <summary>The call's six fixed lines, then this account's quest progress (field=value lines).</summary>
+    private IEnumerable<string> RescueLines(string[] fixedLines)
+    {
+        foreach (string l in fixedLines)
+            yield return l;
+        if (ReadQuestStrings() is { } quests)
+            foreach ((string field, string value) in quests)
+                yield return $"{field}={value}";
     }
 
     private void ClearRescueCall()
@@ -140,7 +222,14 @@ internal sealed partial class Watchdog
                 return null;
             if (DateTime.UtcNow - new DateTime(ticks, DateTimeKind.Utc) > TimeSpan.FromMilliseconds(RescueStaleMs))
                 return null;
-            return new RescueCall(l[0], l[1], l[2], l[3], l[4]);
+            Dictionary<string, string> quests = new();
+            for (int i = 6; i < l.Length; i++)
+            {
+                int eq = l[i].IndexOf('=');
+                if (eq > 0 && l[i].StartsWith("strQuests", StringComparison.Ordinal))
+                    quests[l[i][..eq]] = l[i][(eq + 1)..];
+            }
+            return new RescueCall(l[0], l[1], l[2], l[3], l[4], quests);
         }
         catch
         {
@@ -187,6 +276,8 @@ internal sealed partial class Watchdog
     private async Task RescueAsync(RescueCall call, string file)
     {
         string? myRoom = null, myCell = null, myPad = null;
+        Dictionary<string, string>? ownQuests = null;
+        bool knockedOut = false;
         try
         {
             myRoom = _bot.Map.FullName;
@@ -195,6 +286,14 @@ internal sealed partial class Watchdog
             Write($" {call.User} keeps dying in {call.Room} ({call.Cell}); stopping the script to go help (Rescue Allies).");
             await _manager.StopScript();
             await Task.Delay(1500);
+
+            // See the same boss as the stuck account: borrow its quest progress (put back afterwards).
+            if (call.Quests.Count > 0 && (ownQuests = ReadQuestStrings()) is not null)
+            {
+                int changed = BorrowQuests(ownQuests, call.Quests);
+                if (changed > 0)
+                    Write($" borrowing {call.User}'s quest progress while helping (client-side; this account's own is put back after).");
+            }
 
             if (!await JoinForRescue(call.Room, call.Cell, call.Pad))
             {
@@ -208,6 +307,7 @@ internal sealed partial class Watchdog
                 await Task.Delay(2000);
                 if (!InGame)
                 {
+                    knockedOut = true; // logging back in brings this account's real quest progress back
                     Write(" knocked out of the game while helping; stopping the rescue.");
                     return;
                 }
@@ -220,6 +320,8 @@ internal sealed partial class Watchdog
                 if (!string.Equals(_bot.Map.FullName, now.Room, StringComparison.OrdinalIgnoreCase))
                 {
                     await _bot.Auto.StopAsync();
+                    if (ownQuests is not null && now.Quests.Count > 0)
+                        BorrowQuests(ReadQuestStrings() ?? ownQuests, now.Quests);
                     if (!await JoinForRescue(now.Room, now.Cell, now.Pad))
                     {
                         Write($" couldn't follow {call.User} into {now.Room}; going back.");
@@ -245,6 +347,13 @@ internal sealed partial class Watchdog
         finally
         {
             try { await _bot.Auto.StopAsync(); } catch { }
+            // Put this account's own quest progress back exactly as it was, before it goes back and its script
+            // starts again (its script would otherwise see quests as done that aren't).
+            if (ownQuests is not null && !knockedOut && InGame)
+            {
+                SetQuestStrings(ownQuests);
+                Write(" put this account's own quest progress back.");
+            }
             lock (_rsLastHelped)
                 _rsLastHelped[call.User] = Environment.TickCount;
             try
