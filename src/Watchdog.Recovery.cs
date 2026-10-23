@@ -133,6 +133,13 @@ internal sealed partial class Watchdog
                     _restartScript = false;
                     return;
                 }
+                // Someone else started it since the account left the game (VibeSkua's own relog restart, or the
+                // player) and it has stopped again since: it ran, so don't start it a second time.
+                if (_otherStartAt != 0 && _leftGameAt != 0 && _otherStartAt - _leftGameAt > 0)
+                {
+                    _restartScript = false;
+                    return;
+                }
                 if (string.IsNullOrEmpty(_manager.LoadedScript))
                 {
                     _restartScript = false;
@@ -146,8 +153,14 @@ internal sealed partial class Watchdog
                 object? silentBefore = null;
                 try { silentBefore = silentProp?.GetValue(_manager); silentProp?.SetValue(_manager, true); } catch { }
                 Exception? error;
+                _ourStart = true;
                 try { error = await _manager.StartScript(); }
-                finally { try { if (silentBefore is not null) silentProp?.SetValue(_manager, silentBefore); } catch { } }
+                finally
+                {
+                    try { if (silentBefore is not null) silentProp?.SetValue(_manager, silentBefore); } catch { }
+                    await Task.Delay(1000); // let the tick see this start as ours
+                    _ourStart = false;
+                }
                 if (error is not null)
                 {
                     Write($" couldn't start the script: {error.Message}");

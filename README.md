@@ -10,8 +10,9 @@ normal plugin. It needs no changes to your client: drop one file into the plugin
 > stuck login, stuck script and script restarts (both), Rescue Allies (VibeSkua, and a Skua account rescued by a
 > VibeSkua one). VibeSkua 2.0.6 asks for a script's options before starting it; Watch Dog's script restarts
 > use the saved options instead, so nothing waits on that window. VibeSkua 2.0.7 has its own auto-relogin: Watch Dog
-> leaves an account alone after you click Log Out or Change Server, and with Auto Relogin on it gives VibeSkua's
-> relogin time to work before stepping in. Report anything odd in [Issues](../../issues).
+> leaves an account alone after you click Log Out or Change Server, doesn't start a script a second time after
+> VibeSkua already restarted it, and with Auto Relogin on it gives VibeSkua's relogin time to work before stepping in.
+> (A script that logs out by itself while still running counts as a drop.) Report anything odd in [Issues](../../issues).
 
 ---
 

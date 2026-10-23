@@ -35,6 +35,17 @@ internal sealed partial class Watchdog
 
     public void Start()
     {
+        // Script starts, as they happen (a short script can start and finish between two ticks).
+        _manager.PropertyChanged += (_, e) =>
+        {
+            try
+            {
+                if (e.PropertyName == nameof(IScriptManager.ScriptRunning) && _manager.ScriptRunning && !_ourStart)
+                    _otherStartAt = Environment.TickCount | 1;
+            }
+            catch { }
+        };
+        HookLogoutSignals();
         _thread = new Thread(Loop) { IsBackground = true, Name = "Watch Dog" };
         _thread.Start();
     }
@@ -43,6 +54,7 @@ internal sealed partial class Watchdog
     {
         _stop = true;
         UnhookEvents();
+        UnhookLogoutSignals();
         try { _relogCts?.Cancel(); } catch { }
     }
 
@@ -153,16 +165,7 @@ internal sealed partial class Watchdog
     private bool KnowsIntentionalLogout => _intentionalProp is not null && _disconnectForRelogin is not null;
 
     /// <summary>The player logged out (or went to the server list) on purpose; leave the account alone.</summary>
-    private bool LoggedOutOnPurpose
-    {
-        get
-        {
-            if (!KnowsIntentionalLogout || _ownLogout)
-                return false;
-            try { return _intentionalProp!.GetValue(_bot.Servers) is true; }
-            catch { return false; }
-        }
-    }
+    private bool LoggedOutOnPurpose => _userLoggedOut && !_ownLogout;
 
     /// <summary>The client re-logs by itself within seconds (VibeSkua 2.0.7+ with Auto Relogin on): give it time first.</summary>
     private bool ClientRelogs
@@ -205,13 +208,14 @@ internal sealed partial class Watchdog
         if (_wasInGame)
         {
             _wasInGame = false;
+            _leftGameAt = now | 1;
             _scriptWhenLeft = ScriptRanRecently;
             if (_scriptWhenLeft)
                 _restartScript = true;
             ResetText(string.Empty);
         }
 
-        // VibeSkua 2.0.7+: the player clicked Log Out / Change Server (it stops the script itself). Don't log
+        // The player clicked Log Out / Change Server (VibeSkua 2.0.7 stops the script itself). Don't log
         // back in or start the script again until they're back in game.
         if (LoggedOutOnPurpose)
         {
@@ -291,6 +295,7 @@ internal sealed partial class Watchdog
             Write($" in game again after {_stalls} recover{(_stalls == 1 ? "y" : "ies")}.");
         _stalls = 0;
         _ownLogout = false;
+        ClearUserLogout(!_wasInGame, now);
         _wasInGame = true;
         _lastInGame = now;
         _outSince = 0;
@@ -381,9 +386,19 @@ internal sealed partial class Watchdog
     /// </summary>
     private bool ScriptRanRecently => _manager.ScriptRunning || (_scriptSeenAt != 0 && Environment.TickCount - _scriptSeenAt < 45000);
 
+    private bool _lastRunning;
+    private int _leftGameAt, _otherStartAt;
+    private volatile bool _ourStart; // RestartScriptAfterLogin is starting it
+
     private void TrackScriptStops(int now)
     {
-        if (_manager.ScriptRunning)
+        bool running = _manager.ScriptRunning;
+        // A start we didn't make (VibeSkua 2.0.7's relog starts the script again itself, or the player did):
+        // then there's nothing left for us to restart after this relog.
+        if (running && !_lastRunning && !_ourStart)
+            _otherStartAt = now | 1; // (also caught by the PropertyChanged handler in Start)
+        _lastRunning = running;
+        if (running)
         {
             _scriptSeenAt = now | 1;
             _stoppedInGameAt = 0;
