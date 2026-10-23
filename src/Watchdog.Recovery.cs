@@ -46,7 +46,7 @@ internal sealed partial class Watchdog
             else
             {
                 // A relog from in game.
-                try { _bot.Servers.Logout(); } catch { }
+                LogoutForRelog();
                 await Task.Delay(3000);
             }
 
@@ -122,7 +122,9 @@ internal sealed partial class Watchdog
         {
             for (int attempt = 1; attempt <= 3; attempt++)
             {
-                if (!await WaitInGameSteady(6000, 180000))
+                // VibeSkua 2.0.7+ with Auto Relogin restarts the script itself right after its relog; give it
+                // time to, so the two don't both start it.
+                if (!await WaitInGameSteady(ClientRelogs ? 20000 : 6000, 180000))
                     return; // not back yet; the next time in game tries again
                 if (!_restartScript)
                     return;

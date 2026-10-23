@@ -24,6 +24,13 @@ internal sealed partial class Watchdog
         _manager = manager;
         _dispatcher = dispatcher;
         _options = options;
+        try
+        {
+            Type servers = bot.Servers.GetType();
+            _intentionalProp = servers.GetProperty("IsIntentionalLogout");
+            _disconnectForRelogin = servers.GetMethod("DisconnectForRelogin", Type.EmptyTypes);
+        }
+        catch { }
     }
 
     public void Start()
@@ -135,6 +142,52 @@ internal sealed partial class Watchdog
     private const int OutOfGameMs = 180000;
     private const int LostMs = 60000;
 
+    // ---- VibeSkua 2.0.7+ (its own "universal auto-relogin watchdog") ------------------------------------
+    // Found by reflection, so the plugin still loads in Skua 1.4.5 and older VibeSkua, which don't have them.
+
+    private readonly System.Reflection.PropertyInfo? _intentionalProp;
+    private readonly System.Reflection.MethodInfo? _disconnectForRelogin;
+    private bool _ownLogout; // our own relog logged out (VibeSkua counts any logout as intentional)
+
+    /// <summary>VibeSkua 2.0.7+: tells the user's own Log Out / Change Server apart from a drop.</summary>
+    private bool KnowsIntentionalLogout => _intentionalProp is not null && _disconnectForRelogin is not null;
+
+    /// <summary>The player logged out (or went to the server list) on purpose; leave the account alone.</summary>
+    private bool LoggedOutOnPurpose
+    {
+        get
+        {
+            if (!KnowsIntentionalLogout || _ownLogout)
+                return false;
+            try { return _intentionalProp!.GetValue(_bot.Servers) is true; }
+            catch { return false; }
+        }
+    }
+
+    /// <summary>The client re-logs by itself within seconds (VibeSkua 2.0.7+ with Auto Relogin on): give it time first.</summary>
+    private bool ClientRelogs
+    {
+        get
+        {
+            try { return KnowsIntentionalLogout && _bot.Options.AutoRelogin; }
+            catch { return false; }
+        }
+    }
+
+    private int StallLimit => ClientRelogs ? 60000 : StallMs;
+    private int LostLimit => ClientRelogs ? 120000 : LostMs;
+
+    /// <summary>Back to the login screen for a relog, without it counting as the player's own logout where possible.</summary>
+    private void LogoutForRelog()
+    {
+        _ownLogout = true;
+        if (_disconnectForRelogin is not null)
+        {
+            try { _disconnectForRelogin.Invoke(_bot.Servers, null); return; } catch { }
+        }
+        try { _bot.Servers.Logout(); } catch { }
+    }
+
     private void Tick()
     {
         int now = Environment.TickCount;
@@ -158,6 +211,18 @@ internal sealed partial class Watchdog
             ResetText(string.Empty);
         }
 
+        // VibeSkua 2.0.7+: the player clicked Log Out / Change Server (it stops the script itself). Don't log
+        // back in or start the script again until they're back in game.
+        if (LoggedOutOnPurpose)
+        {
+            _outSince = 0;
+            _lostSince = 0;
+            _restartScript = false;
+            _scriptWhenLeft = false;
+            ResetText(string.Empty);
+            return;
+        }
+
         string text = ConnText();
 
         // "Communication with server has been lost" left on screen.
@@ -165,10 +230,10 @@ internal sealed partial class Watchdog
         {
             if (_lostSince == 0)
                 _lostSince = now | 1;
-            else if (now - _lostSince >= LostMs && Opt("connectionLost", true) && BackoffAllows())
+            else if (now - _lostSince >= LostLimit && Opt("connectionLost", true) && BackoffAllows())
             {
                 _lostSince = 0;
-                StartRecovery($" stuck on \"{text}\" for {LostMs / 1000}s; logging back in", 1, false);
+                StartRecovery($" stuck on \"{text}\" for {LostLimit / 1000}s; logging back in", 1, false);
                 return;
             }
         }
@@ -208,10 +273,10 @@ internal sealed partial class Watchdog
             ResetText(text);
             return;
         }
-        if (now - _textSince < StallMs || !BackoffAllows() || !Opt("stuckLogin", true))
+        if (now - _textSince < StallLimit || !BackoffAllows() || !Opt("stuckLogin", true))
             return;
         AvoidCurrentServer();
-        StartRecovery($" stuck on \"{text}\" for {StallMs / 1000}s", _stalls + 1, true);
+        StartRecovery($" stuck on \"{text}\" for {StallLimit / 1000}s", _stalls + 1, true);
     }
 
     private void ResetText(string text)
@@ -225,6 +290,7 @@ internal sealed partial class Watchdog
         if (_stalls > 0)
             Write($" in game again after {_stalls} recover{(_stalls == 1 ? "y" : "ies")}.");
         _stalls = 0;
+        _ownLogout = false;
         _wasInGame = true;
         _lastInGame = now;
         _outSince = 0;
