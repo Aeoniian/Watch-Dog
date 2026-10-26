@@ -18,6 +18,8 @@ internal sealed class RescueControls : IDisposable
     private bool _updating, _disposed;
     private int _queued;
     private object? _dialog;
+    private object? _settingsDialog, _window;
+    private int _seenDelay = -1, _seenDeaths = -1;
     internal RescueControls(Func<IOptionContainer?> options, Func<string> account, IDialogService? dialogs, IDispatcherService? dispatcher)
     {
         _options = options; _account = account; _dialogs = dialogs; _dispatcher = dispatcher;
@@ -45,19 +47,32 @@ internal sealed class RescueControls : IDisposable
             {
                 foreach (var item in DialogItems())
                 {
-                    bool wanted = ItemOption(item)?.Name == "rescueAlliesShared" ? enabled : allowed;
-                    if (ItemValue(item) is bool current && current == wanted) continue;
+                    string? name = ItemOption(item)?.Name;
+                    // Do not overwrite a partially typed number on the periodic account refresh.
+                    if (name == "rescueDelayMinutes" && _seenDelay == _store.DelayMinutes ||
+                        name == "rescueDeaths" && _seenDeaths == _store.DeathsBeforeRescue) continue;
+                    object wanted = name switch {
+                        "rescueAlliesShared" => enabled,
+                        "allowRescueThisAccount" => allowed,
+                        "rescueDelayMinutes" => _store.DelayMinutes.ToString(),
+                        "rescueDeaths" => _store.DeathsBeforeRescue.ToString(),
+                        _ => ItemValue(item) ?? ""
+                    };
+                    if (Equals(ItemValue(item), wanted) || ItemValue(item)?.ToString() == wanted.ToString()) continue;
                     // Avalonia uses BoolValue; older hosts bind directly to Value.
-                    PropertyInfo? property = item.GetType().GetProperty("BoolValue") ?? item.GetType().GetProperty("Value");
+                    PropertyInfo? property = item.GetType().GetProperty(wanted is bool ? "BoolValue" : "TextValue") ?? item.GetType().GetProperty("Value");
                     if (property?.CanWrite == true) property.SetValue(item, wanted);
                 }
             }
             finally { _updating = false; }
+            _seenDelay = _store.DelayMinutes; _seenDeaths = _store.DeathsBeforeRescue;
         }
     }
     internal void Show()
     {
-        if (_dialogs is null || _disposed || _dialog is not null) return;
+        if (_dialogs is null || _disposed) return;
+        if (_window is not null) { _window.GetType().GetMethod("Activate", Type.EmptyTypes)?.Invoke(_window, null); return; }
+        if (_dialog is not null) return;
         try
         {
             Refresh();
@@ -76,20 +91,40 @@ internal sealed class RescueControls : IDisposable
                 .FirstOrDefault(t => t.Name == "OptionContainerViewModel" && t.GetConstructor([typeof(IOptionContainer)]) is not null);
             if (vmType is null) throw new InvalidOperationException("This client does not expose its native option controls.");
             _dialog = Activator.CreateInstance(vmType, container)!;
+            var timing = Activator.CreateInstance(current.GetType(), _dialogs) as IOptionContainer
+                ?? throw new InvalidOperationException("This client cannot create rescue settings.");
+            timing.Options.Add(Opt.SharedInt("rescueDelayMinutes", "Rescue delay (minutes, 1–120)",
+                "Request help after this long without a kill, starting at the first death (at least two deaths required). Either this timer OR the death count triggers rescue. Changes apply immediately on this PC.", 15));
+            timing.Options.Add(Opt.SharedInt("rescueDeaths", "Deaths before requesting rescue (1–100)",
+                "Consecutive deaths without a kill. A kill resets both thresholds. Defaults: 15 minutes or 10 deaths. Whole numbers only; invalid input is not saved. Existing rescue calls continue until a kill or a normal stop condition.", 10));
+            timing.SetDefaults();
+            foreach (IOption option in timing.Options)
+                timing.OptionValues[option] = (option.Name == "rescueDelayMinutes" ? _store.DelayMinutes : _store.DeathsBeforeRescue).ToString();
+            _settingsDialog = Activator.CreateInstance(vmType, timing)!;
+            _seenDelay = _store.DelayMinutes; _seenDeaths = _store.DeathsBeforeRescue;
             foreach (var item in DialogItems()) ((INotifyPropertyChanged)item).PropertyChanged += OnEdited;
+            try { _window = RescueTabbedWindow.Show(_dialog, _settingsDialog, CloseWindow); return; }
+            catch (InvalidOperationException) { } // Headless/older hosts retain their native option dialog fallback.
             typeof(IDialogService).GetMethods().Single(m => m.Name == "ShowDialog" && m.IsGenericMethodDefinition
                 && m.GetParameters().Length == 2 && m.GetParameters()[1].ParameterType == typeof(string))
                 .MakeGenericMethod(vmType).Invoke(_dialogs, [_dialog, "Rescue Allies - changes apply immediately"]);
+            typeof(IDialogService).GetMethods().Single(m => m.Name == "ShowDialog" && m.IsGenericMethodDefinition
+                && m.GetParameters().Length == 2 && m.GetParameters()[1].ParameterType == typeof(string))
+                .MakeGenericMethod(vmType).Invoke(_dialogs, [_settingsDialog, "Rescue Settings - changes apply immediately"]);
         }
         catch (Exception ex) { _dialogs.ShowMessageBox(ex.Message, "Rescue Allies"); }
         finally
         {
-            if (_dialog is not null)
-                foreach (var item in DialogItems()) ((INotifyPropertyChanged)item).PropertyChanged -= OnEdited;
-            _dialog = null;
+            if (_window is null) CloseWindow();
         }
     }
-    private IEnumerable<object> DialogItems() => _dialog?.GetType().GetProperty("Options")?.GetValue(_dialog) is IEnumerable items ? items.Cast<object>() : [];
+    private void CloseWindow()
+    {
+        foreach (var item in DialogItems()) ((INotifyPropertyChanged)item).PropertyChanged -= OnEdited;
+        _dialog = null; _settingsDialog = null; _window = null;
+    }
+    private IEnumerable<object> DialogItems() => new[] { _dialog, _settingsDialog }.Where(m => m is not null)
+        .SelectMany(m => m!.GetType().GetProperty("Options")?.GetValue(m) is IEnumerable items ? items.Cast<object>() : []);
     private static IOption? ItemOption(object item) => item.GetType().GetProperty("Option")?.GetValue(item) as IOption;
     private static object? ItemValue(object item) => item.GetType().GetProperty("Value")?.GetValue(item);
     private static IEnumerable<Type> Types(Assembly assembly)
@@ -101,14 +136,24 @@ internal sealed class RescueControls : IDisposable
     private void OnEdited(object? sender, PropertyChangedEventArgs args)
     {
         if (_updating || _disposed || args.PropertyName is not ("Value" or "BoolValue") || sender is not INotifyPropertyChanged item) return;
-        bool value = ItemValue(item) is bool b && b;
-        if (ItemOption(item)?.Name == "rescueAlliesShared") _store.SetEnabled(value);
-        else if (_account() is { Length: > 0 } account) _store.SetAllowed(account, value);
-
+        try
+        {
+            string? name = ItemOption(item)?.Name;
+            bool value = ItemValue(item) is bool b && b;
+            if (name == "rescueAlliesShared") _store.SetEnabled(value);
+            else if (name == "allowRescueThisAccount" && _account() is { Length: > 0 } account) _store.SetAllowed(account, value);
+            else if (int.TryParse(ItemValue(item)?.ToString(), out int number))
+            {
+                if (name == "rescueDelayMinutes" && number is >= 1 and <= 120) _store.SetDelayMinutes(number);
+                else if (name == "rescueDeaths" && number is >= 1 and <= 100) _store.SetDeathsBeforeRescue(number);
+            }
+        }
+        catch (Exception ex) { _dialogs?.ShowMessageBox(ex.Message, "Rescue Settings"); }
     }
     public void Dispose()
     {
         _disposed = true; _timer.Dispose(); _store.Changed -= QueueRefresh;
+        _window?.GetType().GetMethod("Close", Type.EmptyTypes)?.Invoke(_window, null);
         if (_dialog is not null) foreach (var item in DialogItems()) ((INotifyPropertyChanged)item).PropertyChanged -= OnEdited;
     }
 }

@@ -7,7 +7,8 @@ namespace WatchDog.Shared;
 // Kept byte-identical in Watch Dog and VibeSkuffle. No client-specific dependencies.
 internal sealed class SharedRescueSettings : IDisposable
 {
-    internal sealed record State(bool Enabled, string[] ExcludedAccounts, long Revision);
+    internal sealed record State(bool Enabled, string[] ExcludedAccounts, long Revision,
+        int DelayMinutes = 15, int DeathsBeforeRescue = 10);
     private static readonly Lazy<SharedRescueSettings> Default = new(() => new(DefaultPath));
     internal static SharedRescueSettings Instance => Default.Value;
     internal static string DefaultPath => Path.Combine(
@@ -37,6 +38,24 @@ internal sealed class SharedRescueSettings : IDisposable
         _fallback = new Timer(_ => Reload(), null, 500, 500);
     }
     internal bool Enabled { get { lock (_gate) return _state.Enabled; } }
+    internal int DelayMinutes { get { lock (_gate) return _state.DelayMinutes; } }
+    internal int DeathsBeforeRescue { get { lock (_gate) return _state.DeathsBeforeRescue; } }
+    internal void SetDelayMinutes(int value)
+    {
+        if (value is < 1 or > 120) throw new ArgumentOutOfRangeException(nameof(value), "Use 1 to 120 minutes.");
+        Update(s => s with { DelayMinutes = value });
+    }
+    internal void SetDeathsBeforeRescue(int value)
+    {
+        if (value is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(value), "Use 1 to 100 deaths.");
+        Update(s => s with { DeathsBeforeRescue = value });
+    }
+    // Either threshold requests help. The timed path still requires repeated deaths without a kill.
+    internal bool ShouldRequest(int deaths, int elapsedMilliseconds)
+    {
+        lock (_gate) return deaths >= _state.DeathsBeforeRescue ||
+            (deaths >= 2 && elapsedMilliseconds >= _state.DelayMinutes * 60000);
+    }
     internal bool IsAllowed(string? account)
     {
         if (string.IsNullOrWhiteSpace(account)) return false;
@@ -56,7 +75,11 @@ internal sealed class SharedRescueSettings : IDisposable
         if (!File.Exists(_path)) return new(false, [], 0);
         using var file = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         State state = JsonSerializer.Deserialize<State>(file) ?? throw new InvalidDataException("Invalid rescue settings.");
-        return state with { ExcludedAccounts = (state.ExcludedAccounts ?? []).Where(a => !string.IsNullOrWhiteSpace(a)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() };
+        return state with {
+            ExcludedAccounts = (state.ExcludedAccounts ?? []).Where(a => !string.IsNullOrWhiteSpace(a)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            DelayMinutes = state.DelayMinutes is >= 1 and <= 120 ? state.DelayMinutes : 15,
+            DeathsBeforeRescue = state.DeathsBeforeRescue is >= 1 and <= 100 ? state.DeathsBeforeRescue : 10
+        };
     }
     private void Update(Func<State, State> change)
     {
@@ -80,6 +103,7 @@ internal sealed class SharedRescueSettings : IDisposable
         Reload();
     }
     private static bool Same(State a, State b) => a.Enabled == b.Enabled &&
+        a.DelayMinutes == b.DelayMinutes && a.DeathsBeforeRescue == b.DeathsBeforeRescue &&
         a.ExcludedAccounts.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).SequenceEqual(
             b.ExcludedAccounts.OrderBy(x => x, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
     private void OnFileChanged(object sender, FileSystemEventArgs args) => Reload();

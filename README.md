@@ -6,13 +6,26 @@ keeps your accounts logged in and their scripts running while you're away.**
 Watch Dog is the in-game part of [VibeSkuffle](https://github.com/Aeoniian/VibeSkuffle)'s watchdog, packaged as a
 normal plugin. It needs no changes to your client: drop one file into the plugins folder.
 
-> **Status: beta.** Earlier versions were tested in Skua 1.4.5 and VibeSkua 2.0.2 to 2.0.7 (private rooms): logged-out relog, connection lost,
+> **Stable release: v1.0.0.** Earlier versions were tested in Skua 1.4.5 and VibeSkua 2.0.2 to 2.0.7 (private rooms): logged-out relog, connection lost,
 > stuck login, stuck script and script restarts (both), Rescue Allies (VibeSkua, and a Skua account rescued by a
 > VibeSkua one). VibeSkua 2.0.6 asks for a script's options before starting it; Watch Dog's script restarts
 > use the saved options instead, so nothing waits on that window. VibeSkua 2.0.7 has its own auto-relogin: Watch Dog
 > leaves an account alone after you click Log Out or Change Server, doesn't start a script a second time after
 > VibeSkua already restarted it, and with Auto Relogin on it gives VibeSkua's relogin time to work before stepping in.
 > (A script that logs out by itself while still running counts as a drop.) Report anything odd in [Issues](../../issues).
+
+## New in v1.0.0 Stable
+
+**Plugins → Rescue Allies** now opens a window with **Rescue Allies** and **Rescue Settings** tabs.
+The settings tab adjusts the shared rescue delay (1–120 minutes) and death threshold (1–100).
+Defaults remain 15 minutes or 10 deaths; either threshold requests help. The timer starts at the first
+death and requires at least two deaths without a kill. A kill clears the streak and rescue call.
+Edits apply to the current streak on the next watchdog check, across updated clients on this PC.
+Whole numbers only; invalid input is not saved. Existing calls continue until a kill or another normal stop condition.
+
+The plugin uses the host's native controls for WPF/Avalonia. If tabbed controls are unavailable, it falls
+back to the host's two native options dialogs. Helpers now use AQW's proper house command when returning
+to their own house. See [the stable release notes](docs/RELEASE-v1.0.0.md).
 
 ## New in Beta5
 
@@ -34,7 +47,7 @@ native WPF interaction still need manual validation. See [the changelog](CHANGEL
 3. Start the client. Watch Dog is on straight away; its settings are under **Plugins → View Plugins → Watch Dog →
    Options**, and **Plugins → Watch Dog log** opens what it has done.
 
-The same file works in both Skua (1.4.5 or newer) and VibeSkua (2.0.x).
+The same file targets Skua (1.4.5 or newer) and VibeSkua (2.x).
 
 **VibeSkuffle users:** you don't need this. VibeSkuffle has all of it (and more) built in. If the file is in the
 shared plugins folder, Watch Dog notices it's running inside VibeSkuffle and stays off there.
@@ -67,7 +80,8 @@ Open **Plugins → Rescue Allies** for two live checkboxes:
 Helpers must be logged in on the same PC and server, with Watch Dog enabled. **They do not need a running
 script or a loaded script.** Manual Auto Attack/Hunt is left alone.
 
-A scripted account asks for help after 10 deaths without a kill, or 15 minutes of only deaths. Eligible helpers
+A scripted account asks for help after the configured death count or rescue timer (defaults: 10 deaths or
+15 minutes without a kill; the timed path requires repeated deaths). Eligible helpers
 go to its room/cell and fight. When the caller gets a kill, the call expires, rescue is disabled, or the helper
 opts out, they stop helping and return to their original room/cell. They give up after 20 minutes.
 
@@ -106,6 +120,8 @@ Rescue controls are under **Plugins → Rescue Allies** and share their own sett
 | Go back to the same room after a relog | on | |
 | Rescue Allies - all accounts | off | Plugins → Rescue Allies; shared live. |
 | Allow this account to rescue | on | Plugins → Rescue Allies; saved per logged-in account. |
+| Rescue delay (minutes) | 15 | Rescue Settings tab; shared, range 1–120. |
+| Deaths before requesting rescue | 10 | Rescue Settings tab; shared, range 1–100. |
 
 Everything Watch Dog does is written to `watchdog.log` in `plugins\WatchDog` (time and account name, never
 passwords). Watch Dog keeps the account's login in memory only (never on disk), to fill in the login screen again.

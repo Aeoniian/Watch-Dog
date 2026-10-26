@@ -135,6 +135,8 @@ internal sealed class Opt : IOption
         new Opt(name, display, description, value, typeof(bool)) { Transient = true };
 
     public static Opt Int(string name, string display, string description, int value) => new(name, display, description, value, typeof(int));
+    public static Opt SharedInt(string name, string display, string description, int value) =>
+        new Opt(name, display, description, value, typeof(int)) { Transient = true };
 
     public override string ToString() => DisplayName;
 }

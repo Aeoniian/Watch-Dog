@@ -17,8 +17,6 @@ namespace WatchDog;
 /// </remarks>
 internal sealed partial class Watchdog
 {
-    private const int RescueDeaths = 10;
-    private const int RescueOnlyDeathsMs = 15 * 60000;
     private const int RescueStaleMs = 60000;
     private const int RescueGiveUpMs = 20 * 60000;
     private const int RescueCooldownMs = 10 * 60000;
@@ -173,8 +171,8 @@ internal sealed partial class Watchdog
             }
             else
             {
-                bool stuck = _rsDeathStreak >= RescueDeaths
-                    || (_rsDeathStreak >= 2 && _rsStreakSince != 0 && now - _rsStreakSince >= RescueOnlyDeathsMs);
+                bool stuck = SharedRescueSettings.Instance.ShouldRequest(_rsDeathStreak,
+                    _rsStreakSince == 0 ? 0 : unchecked(now - _rsStreakSince));
                 if (stuck && !_rsCalling)
                 {
                     _rsCalling = true;
@@ -302,7 +300,7 @@ internal sealed partial class Watchdog
         {
             IScriptManager manager = _manager;
             session = new RescueSession(_bot.Player, _bot.Map, _bot.Combat, _bot.Skills, _bot.Options, _bot.Flash, manager,
-                () => RescueAllowed && !_stop, () => _userLoggedOut);
+                () => RescueAllowed && !_stop, () => _userLoggedOut, _bot.Send);
             _rsSession = session;
             if (!await session.BeginAsync()) return;
             Write($" helping {call.User} in {call.Room}; the original script/idle state will be restored afterward.");

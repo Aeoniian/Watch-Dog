@@ -13,6 +13,8 @@ internal sealed class RescueSession : IDisposable
     private readonly IScriptOption _options;
     private readonly IFlashUtil _flash;
     private readonly IScriptManager _manager;
+    private readonly IScriptSend? _send;
+    private readonly bool _returnToOwnHouse;
     private readonly Func<bool> _enabled;
     private readonly Func<bool> _userCancelled;
     private readonly string _account, _script, _server;
@@ -28,7 +30,8 @@ internal sealed class RescueSession : IDisposable
     internal bool WasRunning => _wasRunning;
     internal bool WasPaused => _wasPaused;
     internal RescueSession(IScriptPlayer player, IScriptMap map, IScriptCombat combat, IScriptSkill skills,
-        IScriptOption options, IFlashUtil flash, IScriptManager manager, Func<bool> enabled, Func<bool>? userCancelled = null)
+        IScriptOption options, IFlashUtil flash, IScriptManager manager, Func<bool> enabled, Func<bool>? userCancelled = null,
+        IScriptSend? send = null)
     {
         _player = player; _map = map; _combat = combat; _skills = skills; _options = options;
         _flash = flash; _manager = manager; _enabled = enabled; _userCancelled = userCancelled ?? (() => false);
@@ -37,6 +40,13 @@ internal sealed class RescueSession : IDisposable
         _pauseProperty = manager.GetType().GetProperty("ScriptPaused");
         _infiniteRange = options.InfiniteRange; _stopAttacking = combat.StopAttacking;
         Room = map.FullName; Cell = player.Cell; Pad = player.Pad;
+        _send = send;
+        try
+        {
+            int characterId = flash.GetGameObject<int>("world.myAvatar.objData.CharID");
+            _returnToOwnHouse = characterId > 0 && Room.Equals($"house-{characterId}", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { }
         _manager.PropertyChanged += OnManagerChanged;
     }
     internal static bool IsPaused(IScriptManager manager) => manager.GetType().GetProperty("ScriptPaused")?.GetValue(manager) is true;
@@ -116,7 +126,12 @@ internal sealed class RescueSession : IDisposable
                         for (int attempt = 0; attempt < 3 && !Interrupted && _player.Playing; attempt++)
                         {
                             if (_flash.IsWorldLoaded && string.Equals(_map.FullName, Room, StringComparison.OrdinalIgnoreCase)) break;
-                            _map.JoinPacket(Room, string.IsNullOrWhiteSpace(Cell) ? "Enter" : Cell, string.IsNullOrWhiteSpace(Pad) ? "Spawn" : Pad);
+                            // AQW ignores normal tfer packets to house-<CharID>. Use the house command
+                            // only when the captured room is proven to be this account's own house.
+                            if (_returnToOwnHouse && _send is not null)
+                                _send.Packet($"%xt%zm%house%1%{_account}%");
+                            else
+                                _map.JoinPacket(Room, string.IsNullOrWhiteSpace(Cell) ? "Enter" : Cell, string.IsNullOrWhiteSpace(Pad) ? "Spawn" : Pad);
                             for (int i = 0; i < 40 && !Interrupted && _player.Playing; i++)
                             {
                                 if (_flash.IsWorldLoaded && string.Equals(_map.FullName, Room, StringComparison.OrdinalIgnoreCase)) break;

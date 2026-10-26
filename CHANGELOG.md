@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.0 (2026-10-26) — Stable
+
+- Added a separate Rescue Settings tab alongside Rescue Allies using the host's native WPF/Avalonia option views.
+- Adjustable shared rescue delay (1–120 minutes) and death threshold (1–100), applied live across updated clients. Defaults remain 15 minutes or 10 deaths; either threshold requests help, with at least two deaths required for the timer path.
+- Existing shared settings migrate without changing the master switch or account exclusions. Invalid values are not saved, and bulk option snapshots cannot overwrite the new settings.
+- Threshold edits apply to the current death streak. A kill resets the streak and request; existing active calls continue through threshold edits.
+
+- Fixed rescue returns to the helper's own house using AQW's house command; normal map transfers cannot enter house rooms.
+
+Validation: 68 rescue checks, 19 installer/army-feedback checks, and 33 updater/drop/Butler/context-label regression checks pass. Actual rendered client views verify uniform drop buttons at 420/620 px, the built-in settings tab, and a two-tab native Avalonia plugin window with bidirectional settings synchronization. Saved-account private-room idle rescue, real combat, return to its starting house and remaining idle pass. The clean reconstructed upstream client builds. Full native WPF interaction, multiple real-account Army commands and overnight runs remain manual checks.
+
+
 ## v1.0.0-beta5 (2026-10-25) - shared Rescue Allies and idle helpers
 
 - Shared Rescue Allies master switch across updated Watch Dog and VibeSkuffle clients, with live control updates.
