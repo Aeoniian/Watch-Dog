@@ -14,7 +14,7 @@ public class WatchDogPlugin : ISkuaPlugin
     public string Description =>
         "Keeps accounts logged in and their scripts running: fixes stuck logins, logs back in after disconnects, " +
         "relogs scripts that stopped doing anything or hit AQW's \"Missing Quest Progress\" bug, starts scripts " +
-        "again after every relog, and can send accounts to help one that keeps dying (Rescue Allies).";
+        "again after every relog, and can send idle or scripted accounts to help one that keeps dying. Rescue controls: Plugins > Rescue Allies.";
 
     internal const string Category = "Watch Dog";
 
@@ -37,12 +37,12 @@ public class WatchDogPlugin : ISkuaPlugin
             "Once the account is back in game (and has stayed in game a few seconds), start the script that was running, check it really runs, up to 3 tries.", true),
         Opt.Bool("returnToRoom", "Go back to the same room after a relog",
             "With no script to restart, go back to the room the account was in (followers of a ButlerV5 master can find it again).", true),
-        Opt.Bool("rescueAllies", "Rescue Allies",
-            "While this account runs a script: when another account on this PC and server keeps dying (10 deaths without a kill, or 15 minutes of only deaths), stop the script, go help, then come back and start it again.", false),
+
     };
 
     private Watchdog? _watchdog;
     private IPluginHelper? _helper;
+    private RescueControls? _rescueControls;
     private const string LogButton = "Watch Dog log";
 
     public void Load(IServiceProvider provider, IPluginHelper helper)
@@ -64,6 +64,10 @@ public class WatchDogPlugin : ISkuaPlugin
             return;
         }
         _watchdog = new Watchdog(bot, manager, dispatcher, () => plugins?.GetContainer(this)?.OptionContainer);
+        _rescueControls = new RescueControls(() => plugins?.GetContainer(this)?.OptionContainer,
+            () => bot.Player.LoggedIn ? bot.Player.Username ?? "" : "",
+            provider.GetService(typeof(IDialogService)) as IDialogService, dispatcher);
+        try { helper.AddMenuButton("Rescue Allies", () => _rescueControls?.Show()); } catch { }
         _watchdog.Start();
         try { helper.AddMenuButton(LogButton, OpenLog); } catch { }
     }
@@ -71,6 +75,8 @@ public class WatchDogPlugin : ISkuaPlugin
     public void Unload()
     {
         try { _helper?.RemoveMenuButton(LogButton); } catch { }
+        try { _helper?.RemoveMenuButton("Rescue Allies"); } catch { }
+        _rescueControls?.Dispose(); _rescueControls = null;
         _watchdog?.Stop();
         _watchdog = null;
     }
@@ -112,7 +118,7 @@ internal sealed class Opt : IOption
     public string DisplayName { get; }
     public string Description { get; }
     public object? DefaultValue { get; }
-    public bool Transient => false;
+    public bool Transient { get; private set; }
     public Type Type { get; }
 
     private Opt(string name, string displayName, string description, object value, Type type)
@@ -125,6 +131,9 @@ internal sealed class Opt : IOption
     }
 
     public static Opt Bool(string name, string display, string description, bool value) => new(name, display, description, value, typeof(bool));
+    public static Opt SharedBool(string name, string display, string description, bool value) =>
+        new Opt(name, display, description, value, typeof(bool)) { Transient = true };
+
     public static Opt Int(string name, string display, string description, int value) => new(name, display, description, value, typeof(int));
 
     public override string ToString() => DisplayName;

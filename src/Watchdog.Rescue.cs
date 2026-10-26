@@ -1,11 +1,12 @@
 using Skua.Core.Interfaces;
+using WatchDog.Shared;
 
 namespace WatchDog;
 
 /// <summary>
 /// Rescue: when an account running a script keeps dying without killing anything (10 deaths in a row, or 15
-/// minutes of only deaths), it asks for help. Every other account on the same server that is running a script
-/// and has "Rescue Allies" turned on stops its script, goes to that room and cell, fights there, and once the
+/// minutes of only deaths), it asks for help. Every eligible account on the same server (including idle accounts)
+/// and has the shared Rescue Allies switch turned on pauses its script, goes to that room and cell, fights there, and once the
 /// stuck account gets a kill (it got past) goes back to where it was and starts its own script again.
 /// </summary>
 /// <remarks>
@@ -22,11 +23,12 @@ internal sealed partial class Watchdog
     private const int RescueGiveUpMs = 20 * 60000;
     private const int RescueCooldownMs = 10 * 60000;
 
-    private static string RescueDir => Path.Combine(Path.GetTempPath(), "VibeSkuaTabs", "rescue");
+    private static string RescueDir => Environment.GetEnvironmentVariable("WATCHDOG_RESCUE_CALL_ROOT") ?? Path.Combine(Path.GetTempPath(), "VibeSkuaTabs", "rescue");
 
     // The account that needs help.
     private int _rsLastDeaths = -1, _rsLastKills = -1, _rsDeathStreak, _rsStreakSince;
     private bool _rsCalling;
+    private string _rsOwner = "";
     private int _rsCallWritten;
 
     // An account helping.
@@ -35,6 +37,10 @@ internal sealed partial class Watchdog
     private readonly Dictionary<string, int> _rsLastHelped = new(StringComparer.OrdinalIgnoreCase);
 
     private bool RescueActive => _rsHelping is not null;
+    private RescueSession? _rsSession;
+    private bool RescueEnabled => SharedRescueSettings.Instance.Enabled;
+    private bool RescueAllowed => RescueEnabled && SharedRescueSettings.Instance.IsAllowed(OwnName) && Opt("enabled", true);
+
 
     private sealed record RescueCall(string User, string Server, string Room, string Cell, string Pad, Dictionary<string, string> Quests);
 
@@ -115,6 +121,20 @@ internal sealed partial class Watchdog
     {
         try
         {
+            string owner = OwnName;
+            if (!string.Equals(owner, _rsOwner, StringComparison.OrdinalIgnoreCase))
+            {
+                if (_rsCalling && _rsOwner.Length > 0)
+                    try { File.Delete(RescueFile(_rsOwner)); } catch { }
+                _rsOwner = owner; _rsCalling = false; _rsDeathStreak = 0; _rsStreakSince = 0; _rsLastDeaths = -1;
+                lock (_rsLastHelped) _rsLastHelped.Clear();
+            }
+            if (!RescueEnabled)
+            {
+                if (_rsCalling) { _rsCalling = false; ClearRescueCall(); }
+                _rsDeathStreak = 0; _rsStreakSince = 0; _rsLastDeaths = -1;
+                return;
+            }
             int deaths = _bot.Stats.Deaths, kills = _bot.Stats.Kills;
             if (_rsLastDeaths < 0)
             {
@@ -141,7 +161,7 @@ internal sealed partial class Watchdog
             _rsLastDeaths = deaths;
             _rsLastKills = kills;
 
-            if (!_manager.ScriptRunning || RescueActive)
+            if (!_manager.ScriptRunning || RescueSession.IsPaused(_manager) || RescueActive)
             {
                 if (_rsCalling)
                 {
@@ -161,14 +181,14 @@ internal sealed partial class Watchdog
                     _rsCallWritten = 0;
                     Write($" died {_rsDeathStreak} times without a kill in {Math.Max(1, (now - _rsStreakSince) / 60000)} minute(s) in {_bot.Map.FullName} ({_bot.Player.Cell}); asking the other accounts for help (Rescue Allies).");
                 }
-                if (_rsCalling && now - _rsCallWritten > 15000)
+                if (_rsCalling && (_rsCallWritten == 0 || now - _rsCallWritten > 15000))
                 {
                     _rsCallWritten = now;
                     WriteRescueCall();
                 }
             }
 
-            if (now - _rsScanAt > 5000)
+            if (_rsScanAt == 0 || now - _rsScanAt > 5000)
             {
                 _rsScanAt = now;
                 ScanForRescueCalls();
@@ -177,7 +197,7 @@ internal sealed partial class Watchdog
         catch { }
     }
 
-    private string OwnName => _user ?? "";
+    private string OwnName => _bot.Player.Username ?? "";
 
     private static string RescueFile(string user) =>
         Path.Combine(RescueDir, new string(user.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray()).ToLowerInvariant() + ".txt");
@@ -187,7 +207,7 @@ internal sealed partial class Watchdog
         try
         {
             string user = OwnName;
-            string server = _server ?? "";
+            string server = RescueSession.ServerName(_bot.Flash);
             if (user.Length == 0 || server.Length == 0)
                 return;
             Directory.CreateDirectory(RescueDir);
@@ -239,12 +259,13 @@ internal sealed partial class Watchdog
 
     private void ScanForRescueCalls()
     {
-        if (!Opt("rescueAllies", false) || RescueActive || _rsCalling || !_manager.ScriptRunning || _busy || _restarting != 0)
+        if (!RescueAllowed || RescueActive || _rsCalling || _bot.Auto.IsRunning || _busy || _restarting != 0 || _userLoggedOut)
             return;
         if (!Directory.Exists(RescueDir))
             return;
         string me = OwnName;
-        string server = _server ?? "";
+        string server = RescueSession.ServerName(_bot.Flash);
+        if (server.Length == 0) return;
         int now = Environment.TickCount;
         foreach (string file in Directory.GetFiles(RescueDir, "*.txt").OrderBy(File.GetCreationTimeUtc))
         {
@@ -275,120 +296,79 @@ internal sealed partial class Watchdog
 
     private async Task RescueAsync(RescueCall call, string file)
     {
-        string? myRoom = null, myCell = null, myPad = null;
+        RescueSession? session = null;
         Dictionary<string, string>? ownQuests = null;
-        bool knockedOut = false;
         try
         {
-            myRoom = _bot.Map.FullName;
-            myCell = _bot.Player.Cell;
-            myPad = _bot.Player.Pad;
-            Write($" {call.User} keeps dying in {call.Room} ({call.Cell}); stopping the script to go help (Rescue Allies).");
-            await _manager.StopScript();
-            await Task.Delay(1500);
-
-            // See the same boss as the stuck account: borrow its quest progress (put back afterwards).
+            IScriptManager manager = _manager;
+            session = new RescueSession(_bot.Player, _bot.Map, _bot.Combat, _bot.Skills, _bot.Options, _bot.Flash, manager,
+                () => RescueAllowed && !_stop, () => _userLoggedOut);
+            _rsSession = session;
+            if (!await session.BeginAsync()) return;
+            Write($" helping {call.User} in {call.Room}; the original script/idle state will be restored afterward.");
             if (call.Quests.Count > 0 && (ownQuests = ReadQuestStrings()) is not null)
-            {
-                int changed = BorrowQuests(ownQuests, call.Quests);
-                if (changed > 0)
-                    Write($" borrowing {call.User}'s quest progress while helping (client-side; this account's own is put back after).");
-            }
-
-            if (!await JoinForRescue(call.Room, call.Cell, call.Pad))
-            {
-                Write($" couldn't get into {call.Room} to help {call.User}; going back.");
-                return;
-            }
-            _bot.Auto.StartAutoAttack();
+                BorrowQuests(ownQuests, call.Quests);
+            if (!await JoinForRescue(call.Room, call.Cell, call.Pad, session)) return;
             int start = Environment.TickCount;
-            while (!_stop)
+            while (session.CanContinue)
             {
-                await Task.Delay(2000);
-                if (!InGame)
+                RescueCall? current = ReadRescueCall(file);
+                if (current is null) break;
+                if (!current.User.Equals(call.User, StringComparison.OrdinalIgnoreCase) ||
+                    !current.Server.Equals(call.Server, StringComparison.OrdinalIgnoreCase)) break;
+                if (!string.Equals(_bot.Map.FullName, current.Room, StringComparison.OrdinalIgnoreCase))
                 {
-                    knockedOut = true; // logging back in brings this account's real quest progress back
-                    Write(" knocked out of the game while helping; stopping the rescue.");
-                    return;
+                    _bot.Combat.CancelAutoAttack();
+                    if (ownQuests is not null && current.Quests.Count > 0)
+                        BorrowQuests(ReadQuestStrings() ?? ownQuests, current.Quests);
+                    if (!await JoinForRescue(current.Room, current.Cell, current.Pad, session)) break;
                 }
-                RescueCall? now = ReadRescueCall(file);
-                if (now is null)
-                {
-                    Write($" {call.User} got past it; going back.");
-                    return;
-                }
-                if (!string.Equals(_bot.Map.FullName, now.Room, StringComparison.OrdinalIgnoreCase))
-                {
-                    await _bot.Auto.StopAsync();
-                    if (ownQuests is not null && now.Quests.Count > 0)
-                        BorrowQuests(ReadQuestStrings() ?? ownQuests, now.Quests);
-                    if (!await JoinForRescue(now.Room, now.Cell, now.Pad))
-                    {
-                        Write($" couldn't follow {call.User} into {now.Room}; going back.");
-                        return;
-                    }
-                    _bot.Auto.StartAutoAttack();
-                }
-                else if (!string.Equals(_bot.Player.Cell, now.Cell, StringComparison.OrdinalIgnoreCase))
-                {
-                    _bot.Map.Jump(now.Cell, string.IsNullOrWhiteSpace(now.Pad) ? "Left" : now.Pad);
-                }
-                if (Environment.TickCount - start > RescueGiveUpMs)
-                {
-                    Write($" helped {call.User} for {RescueGiveUpMs / 60000} minutes and it's still stuck; going back.");
-                    return;
-                }
+                else if (!string.Equals(_bot.Player.Cell, current.Cell, StringComparison.OrdinalIgnoreCase))
+                    _bot.Map.Jump(current.Cell, string.IsNullOrWhiteSpace(current.Pad) ? "Left" : current.Pad);
+                session.Fight();
+                if (Environment.TickCount - start > RescueGiveUpMs) break;
+                await Task.Delay(200);
             }
         }
-        catch (Exception ex)
-        {
-            Write($" rescue failed: {ex.Message}");
-        }
+        catch (Exception ex) { Write($" rescue failed: {ex.Message}"); }
         finally
         {
-            try { await _bot.Auto.StopAsync(); } catch { }
-            // Put this account's own quest progress back exactly as it was, before it goes back and its script
-            // starts again (its script would otherwise see quests as done that aren't).
-            if (ownQuests is not null && !knockedOut && InGame)
-            {
-                SetQuestStrings(ownQuests);
-                Write(" put this account's own quest progress back.");
-            }
-            lock (_rsLastHelped)
-                _rsLastHelped[call.User] = Environment.TickCount;
             try
             {
-                if (myRoom is not null && InGame
-                    && !string.Equals(_bot.Map.FullName, myRoom, StringComparison.OrdinalIgnoreCase))
+                if (session is not null)
                 {
-                    _bot.Map.Join(myRoom, string.IsNullOrWhiteSpace(myCell) ? "Enter" : myCell, string.IsNullOrWhiteSpace(myPad) ? "Spawn" : myPad);
+                    if (ownQuests is not null && session.InOriginalSession && _bot.Player.Playing && _bot.Flash.IsWorldLoaded)
+                        SetQuestStrings(ownQuests);
+                    Write($" rescue ending; interrupted={session.Interrupted}, in game={_bot.Player.Playing && _bot.Flash.IsWorldLoaded}; returning to {session.Room}.");
+                    await session.CompleteAsync();
                 }
             }
-            catch { }
-            // The watchdog loop starts this account's own script again once it has settled.
-            _restartScript = true;
-            _rsHelping = null;
+            catch (Exception ex) { Write($" rescue cleanup failed: {ex.Message}"); }
+            finally
+            {
+                session?.Dispose(); _rsSession = null;
+                if (RescueAllowed)
+                    lock (_rsLastHelped) _rsLastHelped[call.User] = Environment.TickCount;
+                _rsHelping = null;
+            }
         }
     }
 
-    private async Task<bool> JoinForRescue(string room, string cell, string pad)
+    private async Task<bool> JoinForRescue(string room, string cell, string pad, RescueSession session)
     {
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < 3 && session.CanContinue; i++)
         {
-            try
-            {
-                _bot.Map.Join(room, string.IsNullOrWhiteSpace(cell) ? "Enter" : cell, string.IsNullOrWhiteSpace(pad) ? "Spawn" : pad);
-            }
+            try { _bot.Map.JoinPacket(room, string.IsNullOrWhiteSpace(cell) ? "Enter" : cell, string.IsNullOrWhiteSpace(pad) ? "Spawn" : pad); }
             catch { }
-            for (int w = 0; w < 20; w++)
+            for (int w = 0; w < 20 && session.CanContinue; w++)
             {
-                await Task.Delay(500);
-                if (string.Equals(_bot.Map.FullName, room, StringComparison.OrdinalIgnoreCase) && InGame)
+                if (string.Equals(_bot.Map.FullName, room, StringComparison.OrdinalIgnoreCase) && _bot.Player.Playing && _bot.Flash.IsWorldLoaded)
                 {
                     if (!string.IsNullOrWhiteSpace(cell) && !string.Equals(_bot.Player.Cell, cell, StringComparison.OrdinalIgnoreCase))
                         _bot.Map.Jump(cell, string.IsNullOrWhiteSpace(pad) ? "Left" : pad);
                     return true;
                 }
+                await Task.Delay(200);
             }
         }
         return false;

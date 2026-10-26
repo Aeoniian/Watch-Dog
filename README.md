@@ -6,13 +6,20 @@ keeps your accounts logged in and their scripts running while you're away.**
 Watch Dog is the in-game part of [VibeSkuffle](https://github.com/Aeoniian/VibeSkuffle)'s watchdog, packaged as a
 normal plugin. It needs no changes to your client: drop one file into the plugins folder.
 
-> **Status: beta.** Tested in Skua 1.4.5 and VibeSkua 2.0.2 to 2.0.7 (private rooms): logged-out relog, connection lost,
+> **Status: beta.** Earlier versions were tested in Skua 1.4.5 and VibeSkua 2.0.2 to 2.0.7 (private rooms): logged-out relog, connection lost,
 > stuck login, stuck script and script restarts (both), Rescue Allies (VibeSkua, and a Skua account rescued by a
 > VibeSkua one). VibeSkua 2.0.6 asks for a script's options before starting it; Watch Dog's script restarts
 > use the saved options instead, so nothing waits on that window. VibeSkua 2.0.7 has its own auto-relogin: Watch Dog
 > leaves an account alone after you click Log Out or Change Server, doesn't start a script a second time after
 > VibeSkua already restarted it, and with Auto Relogin on it gives VibeSkua's relogin time to work before stepping in.
 > (A script that logs out by itself while still running counts as a drop.) Report anything odd in [Issues](../../issues).
+
+## New in Beta5
+
+**Plugins → Rescue Allies** now has a shared switch that updates every open supported client and a separate
+per-account helper opt-out. Idle accounts can rescue too. Preferences are shared with VibeSkuffle Beta9.5.
+The new code builds against Skua 1.4.5 and passes the combined rescue tests; full stock-client gameplay and
+native WPF interaction still need manual validation. See [the changelog](CHANGELOG.md).
 
 ---
 
@@ -48,13 +55,32 @@ shared plugins folder, Watch Dog notices it's running inside VibeSkuffle and sta
 
 It logs back in on the **same server** the account was on (unless that server is the one that got stuck).
 
-### Rescue Allies (off by default)
-When an account running a script keeps dying (10 deaths without a kill, or 15 minutes of only deaths), every other
-account on the same PC **and server** that is running a script and has *Rescue Allies* on stops its script, goes to
-that room and cell, and fights there. As soon as the stuck account gets a kill they go back to where they were and
-their scripts start again. They give up after 20 minutes. If the boss is hidden behind a questline the helpers haven't done,
-they borrow the stuck account's quest progress while helping (client-side only) and put their own back exactly as it
-was afterwards, so their own scripts aren't fooled. Skua, VibeSkua and VibeSkuffle accounts can help each other.
+### Rescue Allies (shared master off by default)
+
+Open **Plugins → Rescue Allies** for two live checkboxes:
+
+- **Rescue Allies - all accounts:** one shared switch for every updated Watch Dog and VibeSkuffle client on
+  this PC. Changes apply immediately, including other open rescue-control windows.
+- **Allow this account to rescue:** saved for the logged-in account. Turn it off to exclude a helper. Excluded
+  accounts can still ask for help. The shared master never overwrites individual exclusions.
+
+Helpers must be logged in on the same PC and server, with Watch Dog enabled. **They do not need a running
+script or a loaded script.** Manual Auto Attack/Hunt is left alone.
+
+A scripted account asks for help after 10 deaths without a kill, or 15 minutes of only deaths. Eligible helpers
+go to its room/cell and fight. When the caller gets a kill, the call expires, rescue is disabled, or the helper
+opts out, they stop helping and return to their original room/cell. They give up after 20 minutes.
+
+On hosts with script pause support, an existing script is paused and the same run resumes afterward. An
+already paused script stays paused. Older Skua hosts without a pause API stop/restart only the original
+running script. Idle helpers return idle. Manual Stop, a new script, logout or account/server change takes
+precedence over automatic restoration. Helpers use their equipped class's skill slots without changing saved
+skill rotations. Temporary quest-progress borrowing is restored afterward.
+
+The shared switch and exclusions are stored in `%APPDATA%\Skua\WatchDog\rescue-settings.json`, using atomic
+writes and live file notifications with a polling fallback. Both updated implementations use this same file.
+Older plugin/client versions do not understand the new shared switch. Restart clients once after replacing
+the plugin so the updated code is loaded. Rescue controls are saved immediately; there is no extra Save step.
 
 ### What it can't do
 A plugin lives inside the client, so it goes down with it. Watch Dog can't recover from the client itself
@@ -64,7 +90,8 @@ crashing or freezing, or restart a client that keeps growing in memory. (VibeSku
 
 ## Settings
 
-**Plugins → View Plugins → Watch Dog → Options**. Saved per client folder (Skua and VibeSkua each have their own).
+**Plugins → View Plugins → Watch Dog → Options** for ordinary recovery settings, saved per client folder.
+Rescue controls are under **Plugins → Rescue Allies** and share their own settings across updated clients.
 
 | Option | Default | |
 |---|---|---|
@@ -77,7 +104,8 @@ crashing or freezing, or restart a client that keeps growing in memory. (VibeSku
 | Relog on "Missing Quest Progress" spam | on | |
 | Start the script again after a relog | on | |
 | Go back to the same room after a relog | on | |
-| Rescue Allies | off | |
+| Rescue Allies - all accounts | off | Plugins → Rescue Allies; shared live. |
+| Allow this account to rescue | on | Plugins → Rescue Allies; saved per logged-in account. |
 
 Everything Watch Dog does is written to `watchdog.log` in `plugins\WatchDog` (time and account name, never
 passwords). Watch Dog keeps the account's login in memory only (never on disk), to fill in the login screen again.

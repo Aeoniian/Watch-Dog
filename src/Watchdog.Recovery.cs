@@ -230,6 +230,7 @@ internal sealed partial class Watchdog
 
     private void CheckStuckScript(int now)
     {
+        if (RescueActive) return;
         if (now - _stuckCheckAt < 30000)
             return;
         _stuckCheckAt = now;

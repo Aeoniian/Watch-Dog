@@ -392,6 +392,12 @@ internal sealed partial class Watchdog
 
     private void TrackScriptStops(int now)
     {
+        // A rescue on older hosts temporarily stops the original script. Keep recovery aware of it.
+        if (RescueActive && _rsSession is { WasRunning: true, WasPaused: false } session && !session.Interrupted)
+        {
+            _scriptSeenAt = now | 1; _stoppedInGameAt = 0;
+            return;
+        }
         bool running = _manager.ScriptRunning;
         // A start we didn't make (VibeSkua 2.0.7's relog starts the script again itself, or the player did):
         // then there's nothing left for us to restart after this relog.
