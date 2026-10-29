@@ -211,7 +211,11 @@ internal sealed partial class Watchdog
             _leftGameAt = now | 1;
             _scriptWhenLeft = ScriptRanRecently;
             if (_scriptWhenLeft)
+            {
                 _restartScript = true;
+                _reloginMarker = now | 1; // same as VibeSkuffle's built-in: see RestartAfterSilentRelogin
+                _fallbackSince = 0;
+            }
             ResetText(string.Empty);
         }
 
@@ -337,6 +341,7 @@ internal sealed partial class Watchdog
         HookEventsIfNeeded();
         CheckStuckScript(now);
         RescueTick(now);
+        RestartAfterSilentRelogin(now);
 
         if (_restartScript && _restarting == 0 && !RescueActive)
         {
@@ -388,6 +393,44 @@ internal sealed partial class Watchdog
 
     private bool _lastRunning;
     private int _leftGameAt, _otherStartAt;
+    private int _reloginMarker, _fallbackSince;
+    private volatile bool _fallbackRestart; // the fallback asked for this start, so the "someone else started it" check is skipped
+    private const int FallbackSteadyMs = 30000;
+    private const int FallbackWindowMs = 1200000;
+
+    /// <summary>
+    /// Same as VibeSkuffle's built-in Watch Dog: the account is back in game (VibeSkua's own re-login got it there)
+    /// but the script is not running and nothing is going to start it: after 30 seconds steady in game, start it
+    /// (once). Never after a deliberate logout, and not if the script is already running again.
+    /// </summary>
+    private void RestartAfterSilentRelogin(int now)
+    {
+        if (_reloginMarker == 0)
+            return;
+        if (now - _reloginMarker > FallbackWindowMs || LoggedOutOnPurpose || _manager.ScriptRunning)
+        {
+            _reloginMarker = 0;
+            _fallbackSince = 0;
+            return;
+        }
+        if (_busy || _restarting != 0 || RescueActive || _restartScript)
+        {
+            _fallbackSince = 0;
+            return;
+        }
+        if (_fallbackSince == 0)
+        {
+            _fallbackSince = now | 1;
+            return;
+        }
+        if (now - _fallbackSince < FallbackSteadyMs)
+            return;
+        _reloginMarker = 0;
+        _fallbackSince = 0;
+        Write(" VibeSkua's re-login got back in game but the script was not started again; starting it.");
+        _fallbackRestart = true;
+        _restartScript = true;
+    }
     private volatile bool _ourStart; // RestartScriptAfterLogin is starting it
 
     private void TrackScriptStops(int now)

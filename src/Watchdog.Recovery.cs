@@ -124,7 +124,7 @@ internal sealed partial class Watchdog
             {
                 // VibeSkua 2.0.7+ with Auto Relogin restarts the script itself right after its relog; give it
                 // time to, so the two don't both start it.
-                if (!await WaitInGameSteady(ClientRelogs ? 20000 : 6000, 180000))
+                if (!await WaitInGameSteady(ClientRelogs && !_fallbackRestart ? 20000 : 6000, 180000))
                     return; // not back yet; the next time in game tries again
                 if (!_restartScript)
                     return;
@@ -135,7 +135,7 @@ internal sealed partial class Watchdog
                 }
                 // Someone else started it since the account left the game (VibeSkua's own relog restart, or the
                 // player) and it has stopped again since: it ran, so don't start it a second time.
-                if (_otherStartAt != 0 && _leftGameAt != 0 && _otherStartAt - _leftGameAt > 0)
+                if (!_fallbackRestart && _otherStartAt != 0 && _leftGameAt != 0 && _otherStartAt - _leftGameAt > 0)
                 {
                     _restartScript = false;
                     return;
@@ -187,6 +187,7 @@ internal sealed partial class Watchdog
         finally
         {
             _restarting = 0;
+            _fallbackRestart = false;
         }
     }
 
