@@ -6,7 +6,7 @@ keeps your accounts logged in and their scripts running while you're away.**
 Watch Dog is the in-game part of [VibeSkuffle](https://github.com/Aeoniian/VibeSkuffle)'s watchdog, packaged as a
 normal plugin. It needs no changes to your client: drop one file into the plugins folder.
 
-> **Stable release: v1.0.0.** Earlier versions were tested in Skua 1.4.5 and VibeSkua 2.0.2 to 2.0.7 (private rooms): logged-out relog, connection lost,
+> **Stable release: v1.0.1** adds live rescue status to Plugins → Rescue Allies (see [the release notes](docs/RELEASE-v1.0.1.md)). Earlier versions were tested in Skua 1.4.5 and VibeSkua 2.0.2 to 2.0.7 (private rooms): logged-out relog, connection lost,
 > stuck login, stuck script and script restarts (both), Rescue Allies (VibeSkua, and a Skua account rescued by a
 > VibeSkua one). VibeSkua 2.0.6 asks for a script's options before starting it; Watch Dog's script restarts
 > use the saved options instead, so nothing waits on that window. VibeSkua 2.0.7 has its own auto-relogin: Watch Dog

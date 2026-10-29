@@ -39,6 +39,23 @@ internal sealed partial class Watchdog
     private bool RescueEnabled => SharedRescueSettings.Instance.Enabled;
     private bool RescueAllowed => RescueEnabled && SharedRescueSettings.Instance.IsAllowed(OwnName) && Opt("enabled", true);
 
+    private volatile string _rsPhase = "", _rsOutcome = "", _rsScanStatus = "Waiting for the next scan.";
+    private void PublishRescueStatus()
+    {
+        try
+        {
+            int now = Environment.TickCount;
+            int[] cooldowns;
+            lock (_rsLastHelped) cooldowns = _rsLastHelped.Values.Select(v => Math.Max(0, (RescueCooldownMs - unchecked(now-v) + 999)/1000)).Where(v => v > 0).OrderBy(v => v).ToArray();
+            var store = SharedRescueSettings.Instance;
+            bool requesting = _manager.ScriptRunning && !RescueSession.IsPaused(_manager) && !RescueActive;
+            string helper = RescueActive ? "Helping an account." : _rsCalling ? "Requesting help." : _bot.Auto.IsRunning ? "Manual auto attack/hunt is active." : (_busy || _restarting != 0) ? "Recovery is in progress." : _rsScanStatus;
+            RescueStatus.Publish(new RescueStatusSnapshot(DateTime.UtcNow, RescueEnabled, RescueAllowed,
+                _rsDeathStreak, _rsStreakSince == 0 ? 0 : unchecked(now-_rsStreakSince), store.DelayMinutes,
+                store.DeathsBeforeRescue, requesting, _rsCalling, helper, _rsPhase, _rsOutcome, cooldowns));
+        }
+        catch { } // Diagnostics must never interfere with rescue.
+    }
 
     private sealed record RescueCall(string User, string Server, string Room, string Cell, string Pad, Dictionary<string, string> Quests);
 
@@ -126,6 +143,7 @@ internal sealed partial class Watchdog
                     try { File.Delete(RescueFile(_rsOwner)); } catch { }
                 _rsOwner = owner; _rsCalling = false; _rsDeathStreak = 0; _rsStreakSince = 0; _rsLastDeaths = -1;
                 lock (_rsLastHelped) _rsLastHelped.Clear();
+                _rsOutcome = ""; _rsScanStatus = "Waiting for the next scan.";
             }
             if (!RescueEnabled)
             {
@@ -193,6 +211,7 @@ internal sealed partial class Watchdog
             }
         }
         catch { }
+        finally { PublishRescueStatus(); }
     }
 
     private string OwnName => _bot.Player.Username ?? "";
@@ -260,11 +279,12 @@ internal sealed partial class Watchdog
         if (!RescueAllowed || RescueActive || _rsCalling || _bot.Auto.IsRunning || _busy || _restarting != 0 || _userLoggedOut)
             return;
         if (!Directory.Exists(RescueDir))
-            return;
+        { _rsScanStatus = "No active rescue calls seen."; return; }
         string me = OwnName;
         string server = RescueSession.ServerName(_bot.Flash);
         if (server.Length == 0) return;
         int now = Environment.TickCount;
+        _rsScanStatus = "No eligible rescue call seen on the last scan.";
         foreach (string file in Directory.GetFiles(RescueDir, "*.txt").OrderBy(File.GetCreationTimeUtc))
         {
             RescueCall? call = ReadRescueCall(file);
@@ -282,11 +302,11 @@ internal sealed partial class Watchdog
             if (call.User.Equals(me, StringComparison.OrdinalIgnoreCase))
                 continue;
             if (!call.Server.Equals(server, StringComparison.OrdinalIgnoreCase))
-                continue; // a different server: can't reach it without logging out
+            { _rsScanStatus = "An active call is on another server."; continue; } // a different server: can't reach it without logging out
             lock (_rsLastHelped)
                 if (_rsLastHelped.TryGetValue(call.User, out int last) && now - last < RescueCooldownMs)
                     continue;
-            _rsHelping = call.User;
+            _rsHelping = call.User; _rsPhase = "Joining rescue"; _rsOutcome = "";
             _ = Task.Run(() => RescueAsync(call, file));
             return;
         }
@@ -307,6 +327,7 @@ internal sealed partial class Watchdog
             if (call.Quests.Count > 0 && (ownQuests = ReadQuestStrings()) is not null)
                 BorrowQuests(ownQuests, call.Quests);
             if (!await JoinForRescue(call.Room, call.Cell, call.Pad, session)) return;
+            _rsPhase = "Fighting";
             int start = Environment.TickCount;
             while (session.CanContinue)
             {
@@ -328,7 +349,7 @@ internal sealed partial class Watchdog
                 await Task.Delay(200);
             }
         }
-        catch (Exception ex) { Write($" rescue failed: {ex.Message}"); }
+        catch (Exception ex) { _rsOutcome = "Rescue failed; see the local log."; Write($" rescue failed: {ex.Message}"); }
         finally
         {
             try
@@ -338,16 +359,18 @@ internal sealed partial class Watchdog
                     if (ownQuests is not null && session.InOriginalSession && _bot.Player.Playing && _bot.Flash.IsWorldLoaded)
                         SetQuestStrings(ownQuests);
                     Write($" rescue ending; interrupted={session.Interrupted}, in game={_bot.Player.Playing && _bot.Flash.IsWorldLoaded}; returning to {session.Room}.");
+                    _rsPhase = "Returning / restoring original state";
+                    if (_rsOutcome.Length == 0) _rsOutcome = session.Interrupted ? "Interrupted by another action." : "Rescue ended; restoring original state.";
                     await session.CompleteAsync();
                 }
             }
-            catch (Exception ex) { Write($" rescue cleanup failed: {ex.Message}"); }
+            catch (Exception ex) { _rsOutcome = "Cleanup could not finish; see the local log."; Write($" rescue cleanup failed: {ex.Message}"); }
             finally
             {
                 session?.Dispose(); _rsSession = null;
                 if (RescueAllowed)
                     lock (_rsLastHelped) _rsLastHelped[call.User] = Environment.TickCount;
-                _rsHelping = null;
+                _rsHelping = null; _rsPhase = ""; PublishRescueStatus();
             }
         }
     }

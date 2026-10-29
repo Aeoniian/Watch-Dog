@@ -107,7 +107,7 @@ internal sealed class RescueControls : IDisposable
             catch (InvalidOperationException) { } // Headless/older hosts retain their native option dialog fallback.
             typeof(IDialogService).GetMethods().Single(m => m.Name == "ShowDialog" && m.IsGenericMethodDefinition
                 && m.GetParameters().Length == 2 && m.GetParameters()[1].ParameterType == typeof(string))
-                .MakeGenericMethod(vmType).Invoke(_dialogs, [_dialog, "Rescue Allies - changes apply immediately"]);
+                .MakeGenericMethod(vmType).Invoke(_dialogs, [_dialog, "Rescue Allies — " + RescueStatus.Describe(RescueStatus.Latest, DateTime.UtcNow)]);
             typeof(IDialogService).GetMethods().Single(m => m.Name == "ShowDialog" && m.IsGenericMethodDefinition
                 && m.GetParameters().Length == 2 && m.GetParameters()[1].ParameterType == typeof(string))
                 .MakeGenericMethod(vmType).Invoke(_dialogs, [_settingsDialog, "Rescue Settings - changes apply immediately"]);

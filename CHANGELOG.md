@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.1 (2026-10-28)
+
+- **Plugins → Rescue Allies** shows live rescue status, refreshed every second: whether Rescue Allies is on, deaths against the threshold, time since the first death against the timer, whether help has been requested, and whether this account can request help (it needs an active, unpaused script).
+- Shows whether this account is helping, requesting, recovering or waiting for the next scan, the current phase (joining, fighting, returning and restoring its original state), the last outcome, and the remaining cooldown for each requester helped recently.
+- The status is read-only (no game calls, no saved-preference writes) and reads "unavailable" when the account is offline, loading or recovering. Older fallback dialogs show a status snapshot in the title instead of a live panel.
+- The built-in Watch Dog in VibeSkuffle uses the same format. See [the release notes](docs/RELEASE-v1.0.1.md).
+
 ## v1.0.0 (2026-10-26) — Stable
 
 - Added a separate Rescue Settings tab alongside Rescue Allies using the host's native WPF/Avalonia option views.
