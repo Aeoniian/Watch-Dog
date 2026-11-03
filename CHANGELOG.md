@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.2 (2026-11-03)
+
+- **"One Time Quest Only" spam:** 8 of those answers within a minute (a script keeps asking for a quest that can only be done once) make Watch Dog log out and back in. New option "Relog on \"One Time Quest Only\" spam" (on by default). If it comes back within 15 minutes of that relog, the plugin relogs again and says in its log that it cannot restart the client; VibeSkuffle (and the Rust rewrite) restart the whole client in that case. See [the release notes](docs/RELEASE-v1.0.2.md).
+
 ## v1.0.1 (2026-10-28)
 
 - **Plugins → Rescue Allies** shows live rescue status, refreshed every second: whether Rescue Allies is on, deaths against the threshold, time since the first death against the timer, whether help has been requested, and whether this account can request help (it needs an active, unpaused script).

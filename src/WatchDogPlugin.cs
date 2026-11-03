@@ -33,6 +33,8 @@ public class WatchDogPlugin : ISkuaPlugin
             "A running script with no kills, drops, quest turn-ins/accepts, gold changes or movement for this long gets a relog (at most once every 20 minutes).", 15),
         Opt.Bool("questErrors", "Relog on \"Missing Quest Progress\" spam",
             "AQW sometimes refuses every turn-in of a finished quest until you relog. 5 of those messages in 2 minutes (or the same quest refused 10 times) while a script runs: relog.", true),
+        Opt.Bool("oneTimeQuest", "Relog on \"One Time Quest Only\" spam",
+            "A script that keeps asking for a quest that can only be done once makes the server answer \"One Time Quest Only\" again and again. 8 of those in 1 minute: relog. If it comes back within 15 minutes, a plugin still can only relog again (VibeSkuffle restarts the whole client then).", true),
         Opt.Bool("restartScript", "Start the script again after a relog",
             "Once the account is back in game (and has stayed in game a few seconds), start the script that was running, check it really runs, up to 3 tries.", true),
         Opt.Bool("returnToRoom", "Go back to the same room after a relog",

@@ -6,7 +6,7 @@ keeps your accounts logged in and their scripts running while you're away.**
 Watch Dog is the in-game part of [VibeSkuffle](https://github.com/Aeoniian/VibeSkuffle)'s watchdog, packaged as a
 normal plugin. It needs no changes to your client: drop one file into the plugins folder.
 
-> **Stable release: v1.0.1** adds live rescue status to Plugins → Rescue Allies (see [the release notes](docs/RELEASE-v1.0.1.md)). Earlier versions were tested in Skua 1.4.5 and VibeSkua 2.0.2 to 2.0.7 (private rooms): logged-out relog, connection lost,
+> **Stable release: v1.0.2** relogs an account that keeps getting "One Time Quest Only" (see [the release notes](docs/RELEASE-v1.0.2.md)). v1.0.1 added live rescue status to Plugins → Rescue Allies ([notes](docs/RELEASE-v1.0.1.md)). Earlier versions were tested in Skua 1.4.5 and VibeSkua 2.0.2 to 2.0.7 (private rooms): logged-out relog, connection lost,
 > stuck login, stuck script and script restarts (both), Rescue Allies (VibeSkua, and a Skua account rescued by a
 > VibeSkua one). VibeSkua 2.0.6 asks for a script's options before starting it; Watch Dog's script restarts
 > use the saved options instead, so nothing waits on that window. VibeSkua 2.0.7 has its own auto-relogin: Watch Dog
@@ -63,6 +63,7 @@ shared plugins folder, Watch Dog notices it's running inside VibeSkuffle and sta
 | "Communication with server has been lost" stays on screen | Logs back in after 1 minute. |
 | A script stops doing anything (no kills, drops, quests, gold or moving for 15 min) | Logs out and back in. At most once every 20 minutes. |
 | AQW spams "Quest Complete Failed: Missing Quest Progress" (5 in 2 min), or refuses the same quest 10 times | Logs out and back in (that clears it). At most once every 10 minutes. |
+| AQW answers "One Time Quest Only" 8 times in a minute (a script keeps asking for a quest that can only be done once) | Logs out and back in. If it comes back within 15 minutes, the plugin can only relog again; VibeSkuffle restarts the whole client in that case. |
 | A script was running when any of the above happened | Starts it again once the account has been back in game for a few seconds, then checks that it really runs (up to 3 tries). |
 | Logged back in with no script to restart | Goes back to the room it was in, so ButlerV5 followers can find their master. |
 
@@ -116,6 +117,7 @@ Rescue controls are under **Plugins → Rescue Allies** and share their own sett
 | Fix "Communication with server has been lost" | on | |
 | Relog a script that does nothing (minutes, 0 = off) | 15 | |
 | Relog on "Missing Quest Progress" spam | on | |
+| Relog on "One Time Quest Only" spam | on | |
 | Start the script again after a relog | on | |
 | Go back to the same room after a relog | on | |
 | Rescue Allies - all accounts | off | Plugins → Rescue Allies; shared live. |

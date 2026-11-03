@@ -307,6 +307,8 @@ internal sealed partial class Watchdog
             string raw = Convert.ToString(packet) ?? "";
             if (raw.Contains("Missing Quest Progress", StringComparison.OrdinalIgnoreCase))
                 CountQuestError(_questErrors, 5, "\"Quest Complete Failed: Missing Quest Progress\"");
+            if (raw.Contains("One Time Quest Only", StringComparison.OrdinalIgnoreCase))
+                CountOneTimeQuest();
             dynamic? data = packet["params"]?.dataObj;
             if (data is not null && (string?)data.cmd == "ccqr" && (int?)data.bSuccess != 1)
             {
@@ -323,6 +325,35 @@ internal sealed partial class Watchdog
             }
         }
         catch { }
+    }
+
+    // ---- "One Time Quest Only" spam ---------------------------------------------------------------------
+    // A script that keeps asking for a quest that can only be done once makes the server answer "One Time Quest
+    // Only" over and over. Logging out and back in clears it. VibeSkuffle restarts the whole client when it comes
+    // back soon after that relog; a plugin lives inside the client and cannot, so it relogs again and says so.
+
+    private readonly Queue<int> _oneTimeQuest = new();
+    private int _lastOneTimeQuestFix;
+
+    private void CountOneTimeQuest()
+    {
+        int now = Environment.TickCount;
+        lock (_oneTimeQuest)
+        {
+            _oneTimeQuest.Enqueue(now);
+            while (_oneTimeQuest.Count > 0 && now - _oneTimeQuest.Peek() > 60000)
+                _oneTimeQuest.Dequeue();
+            if (_oneTimeQuest.Count < 8)
+                return;
+            _oneTimeQuest.Clear();
+        }
+        if (!Opt("oneTimeQuest", true) || _busy || !InGame)
+            return;
+        bool again = _lastOneTimeQuestFix != 0 && now - _lastOneTimeQuestFix < 15 * 60000;
+        _lastOneTimeQuestFix = now | 1;
+        if (again)
+            Write(" \"One Time Quest Only\" came back within 15 minutes of the last relog. A plugin cannot restart the client (VibeSkuffle does); logging out and back in again.");
+        StartRecovery($" \"One Time Quest Only\" came 8 times in 60 seconds; logging out and back in", 1, false);
     }
 
     private void CountQuestError(Queue<int> times, int needed, string what)
