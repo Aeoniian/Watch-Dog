@@ -5,29 +5,32 @@ namespace WatchDog;
 
 /// <summary>
 /// Rescue: when an account running a script keeps dying without killing anything (10 deaths in a row, or 15
-/// minutes of only deaths), it asks for help. Every eligible account on the same server (including idle accounts)
-/// and has the shared Rescue Allies switch turned on pauses its script, goes to that room and cell, fights there, and once the
-/// stuck account gets a kill (it got past) goes back to where it was and starts its own script again.
+/// minutes of only deaths), it asks for help. Eligible accounts help in its map and cell until it leaves the map
+/// or the helper dies 10 times without a kill, then restore their original state.
 /// </summary>
 /// <remarks>
 /// Same protocol as VibeSkuffle's built-in Rescue Allies, so Skua, VibeSkua and VibeSkuffle accounts on one PC
 /// can help each other. The accounts talk through small files in %TEMP%\VibeSkuaTabs\rescue (one per account asking for help,
-/// refreshed every 15 seconds; a file older than a minute counts as finished). Helpers give up after 20
-/// minutes, and help the same account again at the earliest 10 minutes after the last rescue ended.
+/// refreshed every 15 seconds; a file older than a minute counts as finished). A helper can help the same account
+/// again after the optional shared cooldown (10 minutes by default).
 /// </remarks>
 internal sealed partial class Watchdog
 {
     private const int RescueStaleMs = 60000;
-    private const int RescueGiveUpMs = 20 * 60000;
-    private const int RescueCooldownMs = 10 * 60000;
 
     private static string RescueDir => Environment.GetEnvironmentVariable("WATCHDOG_RESCUE_CALL_ROOT") ?? Path.Combine(Path.GetTempPath(), "VibeSkuaTabs", "rescue");
 
     // The account that needs help.
     private int _rsLastDeaths = -1, _rsLastKills = -1, _rsDeathStreak, _rsStreakSince;
-    private bool _rsCalling;
+    private volatile bool _rsCalling;
+    private volatile bool _rsHoldingHelpers;
+    private int _rsHoldActive;
+    private string _rsCallRoom = "";
+    private int _rsManualRequest;
     private string _rsOwner = "";
     private int _rsCallWritten;
+    private int _rsDeadSince;
+    private int _rsDeadStatusWritten;
 
     // An account helping.
     private volatile string? _rsHelping;
@@ -40,19 +43,38 @@ internal sealed partial class Watchdog
     private bool RescueAllowed => RescueEnabled && SharedRescueSettings.Instance.IsAllowed(OwnName) && Opt("enabled", true);
 
     private volatile string _rsPhase = "", _rsOutcome = "", _rsScanStatus = "Waiting for the next scan.";
+
+    internal string RequestManualRescue()
+    {
+        if (!Opt("enabled", true)) return "Enable Watch Dog before requesting help.";
+        if (!RescueEnabled) return "Turn on Rescue Allies for all accounts first.";
+        if (!_wasInGame) return "Log in and enter a map before requesting help.";
+        if (RescueActive) return "This account is already helping someone else.";
+        if (_busy || _restarting != 0) return "Wait for account recovery to finish before requesting help.";
+        if (_rsCalling || _rsHoldingHelpers) return "Help is already requested for this map.";
+        if (Interlocked.CompareExchange(ref _rsManualRequest, 1, 0) != 0)
+            return "Your help request is already queued.";
+        return "Manual help request queued.";
+    }
+
     private void PublishRescueStatus()
     {
         try
         {
             int now = Environment.TickCount;
-            int[] cooldowns;
-            lock (_rsLastHelped) cooldowns = _rsLastHelped.Values.Select(v => Math.Max(0, (RescueCooldownMs - unchecked(now-v) + 999)/1000)).Where(v => v > 0).OrderBy(v => v).ToArray();
             var store = SharedRescueSettings.Instance;
+            int cooldownMs = store.CooldownMinutes * 60000;
+            int[] cooldowns;
+            lock (_rsLastHelped) cooldowns = store.CooldownEnabled
+                ? _rsLastHelped.Values.Select(v => Math.Max(0, (cooldownMs - unchecked(now-v) + 999)/1000)).Where(v => v > 0).OrderBy(v => v).ToArray()
+                : [];
             bool requesting = _manager.ScriptRunning && !RescueSession.IsPaused(_manager) && !RescueActive;
-            string helper = RescueActive ? "Helping an account." : _rsCalling ? "Requesting help." : _bot.Auto.IsRunning ? "Manual auto attack/hunt is active." : (_busy || _restarting != 0) ? "Recovery is in progress." : _rsScanStatus;
-            RescueStatus.Publish(new RescueStatusSnapshot(DateTime.UtcNow, RescueEnabled, RescueAllowed,
+            string helper = RescueActive ? "Helping an account." : _rsCalling ? "Requesting help." : _rsHoldingHelpers ? "Helpers are staying in this map." : _bot.Auto.IsRunning ? "Manual auto attack/hunt is active." : (_busy || _restarting != 0) ? "Recovery is in progress." : _rsScanStatus;
+            RescueStatusSnapshot status = new(DateTime.UtcNow, RescueEnabled, RescueAllowed,
                 _rsDeathStreak, _rsStreakSince == 0 ? 0 : unchecked(now-_rsStreakSince), store.DelayMinutes,
-                store.DeathsBeforeRescue, requesting, _rsCalling, helper, _rsPhase, _rsOutcome, cooldowns));
+                store.DeathsBeforeRescue, store.CooldownEnabled, requesting, _rsCalling || _rsHoldingHelpers, helper, _rsPhase, _rsOutcome, cooldowns);
+            RescueStatus.Publish(status);
+            RescueAccountHub.Publish(OwnName, RescueSession.ServerName(_bot.Flash), _bot.Map.FullName, _bot.Player.Cell, status);
         }
         catch { } // Diagnostics must never interfere with rescue.
     }
@@ -136,27 +158,55 @@ internal sealed partial class Watchdog
     {
         try
         {
+            if (_rsDeadSince != 0)
+            {
+                _rsDeadSince = 0;
+                _rsCallWritten = 0; // Publish the respawned caller's current cell immediately.
+                _rsDeadStatusWritten = 0;
+            }
             string owner = OwnName;
             if (!string.Equals(owner, _rsOwner, StringComparison.OrdinalIgnoreCase))
             {
-                if (_rsCalling && _rsOwner.Length > 0)
+                if ((_rsCalling || _rsHoldingHelpers) && _rsOwner.Length > 0)
                     try { File.Delete(RescueFile(_rsOwner)); } catch { }
-                _rsOwner = owner; _rsCalling = false; _rsDeathStreak = 0; _rsStreakSince = 0; _rsLastDeaths = -1;
+                Interlocked.Exchange(ref _rsManualRequest, 0);
+                _rsOwner = owner; _rsCalling = false; _rsHoldingHelpers = false; _rsCallRoom = ""; _rsDeathStreak = 0; _rsStreakSince = 0; _rsLastDeaths = -1;
                 lock (_rsLastHelped) _rsLastHelped.Clear();
                 _rsOutcome = ""; _rsScanStatus = "Waiting for the next scan.";
             }
+            bool remoteHelpRequested = RescueAccountHub.ConsumeManualHelpRequest(owner);
             if (!RescueEnabled)
             {
-                if (_rsCalling) { _rsCalling = false; ClearRescueCall(); }
+                Interlocked.Exchange(ref _rsManualRequest, 0);
+                if (_rsCalling || _rsHoldingHelpers) { _rsCalling = false; _rsHoldingHelpers = false; ClearRescueCall(); }
                 _rsDeathStreak = 0; _rsStreakSince = 0; _rsLastDeaths = -1;
                 return;
             }
+
+            if (remoteHelpRequested)
+            {
+                string result = RequestManualRescue();
+                Write($" received a manual help request from the Watch Dog account selector: {result}");
+            }
+
+            if (Interlocked.Exchange(ref _rsManualRequest, 0) != 0)
+            {
+                _rsCalling = true;
+                _rsHoldingHelpers = false;
+                _rsCallRoom = _bot.Map.FullName;
+                _rsCallWritten = 0;
+                _rsDeathStreak = 0;
+                _rsStreakSince = 0;
+                Write($" manually requested Rescue Allies help in {_bot.Map.FullName} ({_bot.Player.Cell}).");
+            }
+
             int deaths = _bot.Stats.Deaths, kills = _bot.Stats.Kills;
             if (_rsLastDeaths < 0)
             {
                 _rsLastDeaths = deaths;
                 _rsLastKills = kills;
             }
+            bool rsActivity = kills != _rsLastKills || deaths > _rsLastDeaths;
             if (kills != _rsLastKills)
             {
                 _rsDeathStreak = 0;
@@ -164,8 +214,9 @@ internal sealed partial class Watchdog
                 if (_rsCalling)
                 {
                     _rsCalling = false;
-                    ClearRescueCall();
-                    Write(" got a kill; the accounts helping can go back to what they were doing.");
+                    _rsHoldingHelpers = true;
+                    _rsCallRoom = _bot.Map.FullName;
+                    Write(" got a kill; helpers will stay until this account leaves the map.");
                 }
             }
             else if (deaths > _rsLastDeaths)
@@ -182,7 +233,8 @@ internal sealed partial class Watchdog
                 if (_rsCalling)
                 {
                     _rsCalling = false;
-                    ClearRescueCall();
+                    _rsHoldingHelpers = true;
+                    _rsCallRoom = _bot.Map.FullName;
                 }
                 _rsDeathStreak = 0;
                 _rsStreakSince = 0;
@@ -194,14 +246,39 @@ internal sealed partial class Watchdog
                 if (stuck && !_rsCalling)
                 {
                     _rsCalling = true;
+                    _rsHoldingHelpers = false;
+                    _rsCallRoom = _bot.Map.FullName;
                     _rsCallWritten = 0;
                     Write($" died {_rsDeathStreak} times without a kill in {Math.Max(1, (now - _rsStreakSince) / 60000)} minute(s) in {_bot.Map.FullName} ({_bot.Player.Cell}); asking the other accounts for help (Rescue Allies).");
                 }
-                if (_rsCalling && (_rsCallWritten == 0 || now - _rsCallWritten > 15000))
+            }
+
+            if (_rsHoldingHelpers)
+            {
+                if (_rsHoldActive == 0 || rsActivity) _rsHoldActive = now | 1;
+                int holdLimit = SharedRescueSettings.Instance.HoldLimitMinutes;
+                if (holdLimit > 0 && unchecked(now - _rsHoldActive) >= holdLimit * 60000)
                 {
-                    _rsCallWritten = now;
-                    WriteRescueCall();
+                    _rsHoldingHelpers = false;
+                    _rsHoldActive = 0;
+                    _rsCallWritten = 0;
+                    ClearRescueCall();
+                    Write($" no kill or death for {holdLimit} minute(s); helpers are released (hold limit).");
                 }
+            }
+            else _rsHoldActive = 0;
+
+            if (_rsHoldingHelpers && !string.Equals(_bot.Map.FullName, _rsCallRoom, StringComparison.OrdinalIgnoreCase))
+            {
+                _rsHoldingHelpers = false;
+                _rsCallWritten = 0;
+                ClearRescueCall();
+                Write(" left the rescue map; helpers can return to their original state.");
+            }
+            if ((_rsCalling || _rsHoldingHelpers) && (_rsCallWritten == 0 || now - _rsCallWritten > 15000))
+            {
+                _rsCallWritten = now;
+                WriteRescueCall();
             }
 
             if (_rsScanAt == 0 || now - _rsScanAt > 5000)
@@ -212,6 +289,97 @@ internal sealed partial class Watchdog
         }
         catch { }
         finally { PublishRescueStatus(); }
+    }
+
+    /// <summary>
+    /// Keeps a caller's rescue lease alive while AQW temporarily reports the dead avatar as not Playing.
+    /// A real logout ends it immediately; an unloaded dead world gets a bounded grace period.
+    /// </summary>
+    private bool MaintainRescueCallDuringDeath(int now)
+    {
+        if (!_rsCalling && !_rsHoldingHelpers)
+        {
+            _rsDeadSince = 0;
+            return false;
+        }
+
+        try
+        {
+            if (!RescueEnabled)
+            {
+                _rsCalling = false; _rsHoldingHelpers = false; _rsCallWritten = 0; _rsDeadSince = 0;
+                ClearRescueCall();
+                return false;
+            }
+            if (!_bot.Player.LoggedIn || _bot.Player.Alive)
+            {
+                _rsDeadSince = 0;
+                return false;
+            }
+
+            if (_rsDeadSince == 0) _rsDeadSince = now | 1;
+            bool worldLoaded = _bot.Flash.IsWorldLoaded;
+            if (worldLoaded)
+            {
+                string currentRoom = _bot.Map.FullName;
+                if (!string.IsNullOrWhiteSpace(currentRoom) && !string.IsNullOrWhiteSpace(_rsCallRoom) &&
+                    !string.Equals(currentRoom, _rsCallRoom, StringComparison.OrdinalIgnoreCase))
+                {
+                    _rsCalling = false; _rsHoldingHelpers = false; _rsCallWritten = 0; _rsDeadSince = 0;
+                    ClearRescueCall();
+                    Write(" left the rescue map while dead; helpers can return to their original state.");
+                    return false;
+                }
+            }
+            else if (unchecked(now - _rsDeadSince) >= RescueStaleMs)
+            {
+                _rsCalling = false; _rsHoldingHelpers = false; _rsCallWritten = 0; _rsDeadSince = 0;
+                ClearRescueCall();
+                Write(" stayed out of the loaded world after dying; ending the rescue call after the respawn grace period.");
+                return false;
+            }
+
+            if (_rsCallWritten == 0 || unchecked(now - _rsCallWritten) >= 15000)
+            {
+                if (RefreshRescueCallTimestamp(OwnName))
+                    _rsCallWritten = now;
+                else if (worldLoaded && !string.IsNullOrWhiteSpace(_bot.Map.FullName))
+                {
+                    WriteRescueCall();
+                    _rsCallWritten = now;
+                }
+            }
+            if (_rsDeadStatusWritten == 0 || unchecked(now - _rsDeadStatusWritten) >= 5000)
+            {
+                if (RescueStatus.Latest is { } latest)
+                {
+                    RescueStatusSnapshot refreshed = latest with { UpdatedUtc = DateTime.UtcNow, Calling = true };
+                    RescueStatus.Publish(refreshed);
+                    RescueCall? call = ReadRescueCall(RescueFile(OwnName));
+                    RescueAccountHub.Publish(OwnName, RescueSession.ServerName(_bot.Flash),
+                        call?.Room ?? _rsCallRoom, call?.Cell ?? _bot.Player.Cell, refreshed);
+                }
+                _rsDeadStatusWritten = now;
+            }
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private bool RefreshRescueCallTimestamp(string user)
+    {
+        try
+        {
+            string file = RescueFile(user);
+            if (!File.Exists(file)) return false;
+            string[] lines = File.ReadAllLines(file);
+            if (lines.Length < 6) return false;
+            lines[5] = DateTime.UtcNow.Ticks.ToString();
+            File.WriteAllLines(file + ".tmp", lines);
+            File.Move(file + ".tmp", file, true);
+            return true;
+        }
+        catch { return false; }
     }
 
     private string OwnName => _bot.Player.Username ?? "";
@@ -303,9 +471,14 @@ internal sealed partial class Watchdog
                 continue;
             if (!call.Server.Equals(server, StringComparison.OrdinalIgnoreCase))
             { _rsScanStatus = "An active call is on another server."; continue; } // a different server: can't reach it without logging out
-            lock (_rsLastHelped)
-                if (_rsLastHelped.TryGetValue(call.User, out int last) && now - last < RescueCooldownMs)
-                    continue;
+            SharedRescueSettings store = SharedRescueSettings.Instance;
+            if (store.CooldownEnabled)
+            {
+                int cooldownMs = store.CooldownMinutes * 60000;
+                lock (_rsLastHelped)
+                    if (_rsLastHelped.TryGetValue(call.User, out int last) && now - last < cooldownMs)
+                        continue;
+            }
             _rsHelping = call.User; _rsPhase = "Joining rescue"; _rsOutcome = "";
             _ = Task.Run(() => RescueAsync(call, file));
             return;
@@ -319,33 +492,75 @@ internal sealed partial class Watchdog
         try
         {
             IScriptManager manager = _manager;
-            session = new RescueSession(_bot.Player, _bot.Map, _bot.Combat, _bot.Skills, _bot.Options, _bot.Flash, manager,
+            session = new RescueSession(_bot.Player, _bot.Map, _bot.Combat, _bot.Skills, _bot.Inventory, _bot.Wait,
+                _bot.Monsters, (SharedRescueSettings.Instance.UseBossLoadout ? BossRescueLoadout.Read(OwnName) : null), _bot.Options, _bot.Flash, manager,
                 () => RescueAllowed && !_stop, () => _userLoggedOut, _bot.Send);
             _rsSession = session;
             if (!await session.BeginAsync()) return;
             Write($" helping {call.User} in {call.Room}; the original script/idle state will be restored afterward.");
             if (call.Quests.Count > 0 && (ownQuests = ReadQuestStrings()) is not null)
                 BorrowQuests(ownQuests, call.Quests);
-            if (!await JoinForRescue(call.Room, call.Cell, call.Pad, session)) return;
-            _rsPhase = "Fighting";
-            int start = Environment.TickCount;
+            int observedDeaths = _bot.Stats.Deaths, observedKills = _bot.Stats.Kills, deathStreak = 0;
             while (session.CanContinue)
             {
                 RescueCall? current = ReadRescueCall(file);
                 if (current is null) break;
                 if (!current.User.Equals(call.User, StringComparison.OrdinalIgnoreCase) ||
                     !current.Server.Equals(call.Server, StringComparison.OrdinalIgnoreCase)) break;
-                if (!string.Equals(_bot.Map.FullName, current.Room, StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(current.Room, call.Room, StringComparison.OrdinalIgnoreCase))
+                {
+                    _rsOutcome = $"{call.User} left the rescue map.";
+                    Write($" {call.User} left {call.Room}; ending the rescue.");
+                    break;
+                }
+
+                int deaths = _bot.Stats.Deaths, kills = _bot.Stats.Kills;
+                if (kills != observedKills) deathStreak = 0;
+                if (deaths > observedDeaths)
+                {
+                    deathStreak += deaths - observedDeaths;
+                    observedDeaths = deaths; observedKills = kills;
+                    _bot.Combat.CancelAutoAttack();
+                    _rsPhase = "Waiting to respawn";
+                    int helperDeathLimit = SharedRescueSettings.Instance.HelperDeathsWithoutKill;
+                    if (deathStreak >= helperDeathLimit)
+                    {
+                        _rsOutcome = $"Stopped after {deathStreak} deaths without a kill (limit {helperDeathLimit}).";
+                        Write($" died {deathStreak} times without a kill while helping {call.User} (helper limit {helperDeathLimit}); ending this rescue.");
+                        break;
+                    }
+                    await Task.Delay(500);
+                    continue;
+                }
+                observedDeaths = deaths; observedKills = kills;
+
+                if (!session.CanAct || !HelperAlive())
+                {
+                    _rsPhase = "Waiting to respawn";
+                    if (!HelperAlive())
+                        try { _bot.Flash.CallGameFunction("world.resPlayer"); } catch { }
+                    await Task.Delay(1000);
+                    continue;
+                }
+
+                if (!string.Equals(_bot.Map.FullName, call.Room, StringComparison.OrdinalIgnoreCase))
                 {
                     _bot.Combat.CancelAutoAttack();
                     if (ownQuests is not null && current.Quests.Count > 0)
                         BorrowQuests(ReadQuestStrings() ?? ownQuests, current.Quests);
-                    if (!await JoinForRescue(current.Room, current.Cell, current.Pad, session)) break;
+                    _rsPhase = "Rejoining rescue cell";
+                    if (!await JoinForRescue(call.Room, current.Cell, current.Pad, session))
+                    {
+                        await Task.Delay(500);
+                        continue;
+                    }
+                    _rsPhase = "Fighting";
                 }
                 else if (!string.Equals(_bot.Player.Cell, current.Cell, StringComparison.OrdinalIgnoreCase))
                     _bot.Map.Jump(current.Cell, string.IsNullOrWhiteSpace(current.Pad) ? "Left" : current.Pad);
+
+                _rsPhase = "Fighting";
                 session.Fight();
-                if (Environment.TickCount - start > RescueGiveUpMs) break;
                 await Task.Delay(200);
             }
         }
@@ -379,11 +594,12 @@ internal sealed partial class Watchdog
     {
         for (int i = 0; i < 3 && session.CanContinue; i++)
         {
+            if (!session.CanAct) { await Task.Delay(200); continue; }
             try { _bot.Map.JoinPacket(room, string.IsNullOrWhiteSpace(cell) ? "Enter" : cell, string.IsNullOrWhiteSpace(pad) ? "Spawn" : pad); }
             catch { }
             for (int w = 0; w < 20 && session.CanContinue; w++)
             {
-                if (string.Equals(_bot.Map.FullName, room, StringComparison.OrdinalIgnoreCase) && _bot.Player.Playing && _bot.Flash.IsWorldLoaded)
+                if (string.Equals(_bot.Map.FullName, room, StringComparison.OrdinalIgnoreCase) && session.CanAct)
                 {
                     if (!string.IsNullOrWhiteSpace(cell) && !string.Equals(_bot.Player.Cell, cell, StringComparison.OrdinalIgnoreCase))
                         _bot.Map.Jump(cell, string.IsNullOrWhiteSpace(pad) ? "Left" : pad);
@@ -393,5 +609,15 @@ internal sealed partial class Watchdog
             }
         }
         return false;
+    }
+
+    private bool HelperAlive()
+    {
+        try
+        {
+            const string hp = "world.myAvatar.objData.intHP";
+            return _bot.Flash.IsNull(hp) || _bot.Flash.GetGameObject<int>(hp) > 0;
+        }
+        catch { return true; }
     }
 }

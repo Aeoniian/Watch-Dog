@@ -134,7 +134,7 @@ internal sealed partial class Watchdog
 
     // ---- state -----------------------------------------------------------------------------------------
 
-    private bool _wasInGame;
+    private volatile bool _wasInGame;
     private int _lastInGame;
     private string? _user, _pass;           // kept in memory only, to fill in the login again
     private string? _server, _room, _cell, _pad;
@@ -204,10 +204,22 @@ internal sealed partial class Watchdog
             return;
         }
 
+        // AQW reports a dead character as not Playing even though it remains logged in and may still be
+        // in the same loaded map. Keep an active rescue request alive across that temporary state.
+        if (MaintainRescueCallDuringDeath(now))
+            return;
+
         // Just left the game.
         if (_wasInGame)
         {
             _wasInGame = false;
+            Interlocked.Exchange(ref _rsManualRequest, 0);
+            if (_rsCalling || _rsHoldingHelpers)
+            {
+                _rsCalling = false;
+                _rsHoldingHelpers = false;
+                ClearRescueCall();
+            }
             _leftGameAt = now | 1;
             _scriptWhenLeft = ScriptRanRecently;
             if (_scriptWhenLeft)

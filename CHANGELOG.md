@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.0.3 (2026-11-07)
+
+- **Hold limit** (new): helpers are released after 30 minutes by default without a kill or death of the caller (0 = no limit). Shared with VibeSkuffle and the Rust client.
+- **Boss class and gear switch** (new): turns the helpers' CoreBots Boss class and gear on or off (default on). Shared with VibeSkuffle and the Rust client.
+- Changes by **Noxus2k-AQW** from the GitHub discussion "Watch-Dogs Adjustments" (Watch Dog 1.0.24 and 1.0.25), taken over as they were; thank you! The "One Time Quest Only" rule of v1.0.2 is unchanged:
+
+- Added an Accounts tab that lists active Watch Dog accounts on this PC, shows live rescue status, and routes manual help requests to the selected account through a shared local file bridge. Watch Dog must be loaded on each account; only one control window needs to be open.
+- Added per-account helper eligibility to the Accounts tab, removed the duplicate Request Help button from Rescue Allies, and made the cooldown amount entry appear only while the cooldown is enabled.
+- Rescue helpers now use the class and skill mode from their per-account Skua CoreBots Boss selection, and apply selected Boss equipment slots when enabled. Their prior equipped items and skill provider are restored when rescue ends. With no Boss class/loadout configured, the current setup is retained.
+- Made the shared helper cooldown optional. It defaults to on at 10 minutes and can be adjusted from 1 to 30 minutes; turning it off hides the amount and removes the repeat-help wait.
+- Added a shared helper death limit, default 5 and adjustable from 1 to 100. Helpers now stop attacking, clear their target, and request combat exit before restoring their previous setup.
+- Kept a rescue request active through the requesting account's death and respawn while it remains in the same map; logout or map departure ends the call. The account status stays visible during the respawn grace period.
+- Removed the duplicate live status display from Rescue Allies; per-account status remains in Accounts. Reworked the cooldown control into one row and show its minutes field only when enabled.
+- Removed the nonfunctional Copy button from Watch Dog Log; its read-only text can now be selected and copied directly. Kept log selection stable while new lines arrive.
+- Logged each helper's selected Boss class, skill mode, and dedicated gear slots. Equipment setup and restoration now skip items already equipped, wait for Skua's equip cooldown, confirm gear changes with added spacing, and report the items confirmed or failed during restoration.
+
 ## v1.0.2 (2026-11-03)
 
 - **"One Time Quest Only" spam:** 8 of those answers within a minute (a script keeps asking for a quest that can only be done once) make Watch Dog log out and back in. New option "Relog on \"One Time Quest Only\" spam" (on by default). If it comes back within 15 minutes of that relog, the plugin relogs again and says in its log that it cannot restart the client; VibeSkuffle (and the Rust rewrite) restart the whole client in that case. See [the release notes](docs/RELEASE-v1.0.2.md).

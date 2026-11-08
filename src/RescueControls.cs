@@ -11,6 +11,7 @@ internal sealed class RescueControls : IDisposable
 {
     private readonly Func<IOptionContainer?> _options;
     private readonly Func<string> _account;
+    private readonly Func<string> _requestHelp;
     private readonly IDialogService? _dialogs;
     private readonly IDispatcherService? _dispatcher;
     private readonly SharedRescueSettings _store = SharedRescueSettings.Instance;
@@ -18,11 +19,13 @@ internal sealed class RescueControls : IDisposable
     private bool _updating, _disposed;
     private int _queued;
     private object? _dialog;
-    private object? _settingsDialog, _window;
-    private int _seenDelay = -1, _seenDeaths = -1;
-    internal RescueControls(Func<IOptionContainer?> options, Func<string> account, IDialogService? dialogs, IDispatcherService? dispatcher)
+    private object? _settingsDialog, _helperSettingsDialog, _window;
+    private int _seenDelay = -1, _seenDeaths = -1, _seenHelperDeaths = -1, _seenHold = -1;
+    private bool _seenBoss = true;
+    internal RescueControls(Func<IOptionContainer?> options, Func<string> account, Func<string> requestHelp,
+        IDialogService? dialogs, IDispatcherService? dispatcher)
     {
-        _options = options; _account = account; _dialogs = dialogs; _dispatcher = dispatcher;
+        _options = options; _account = account; _requestHelp = requestHelp; _dialogs = dialogs; _dispatcher = dispatcher;
         _store.Changed += QueueRefresh;
         _timer = new Timer(_ => QueueRefresh(), null, 200, 200);
     }
@@ -39,7 +42,7 @@ internal sealed class RescueControls : IDisposable
     }
     private void Refresh()
     {
-        bool enabled = _store.Enabled, allowed = _store.IsAllowed(_account());
+        bool enabled = _store.Enabled;
         if (_dialog is not null)
         {
             _updating = true;
@@ -50,12 +53,17 @@ internal sealed class RescueControls : IDisposable
                     string? name = ItemOption(item)?.Name;
                     // Do not overwrite a partially typed number on the periodic account refresh.
                     if (name == "rescueDelayMinutes" && _seenDelay == _store.DelayMinutes ||
-                        name == "rescueDeaths" && _seenDeaths == _store.DeathsBeforeRescue) continue;
+                        name == "rescueDeaths" && _seenDeaths == _store.DeathsBeforeRescue ||
+                        name == "helperDeathsWithoutKill" && _seenHelperDeaths == _store.HelperDeathsWithoutKill ||
+                        name == "holdLimitMinutes" && _seenHold == _store.HoldLimitMinutes ||
+                        name == "useBossLoadout" && _seenBoss == _store.UseBossLoadout) continue;
                     object wanted = name switch {
                         "rescueAlliesShared" => enabled,
-                        "allowRescueThisAccount" => allowed,
                         "rescueDelayMinutes" => _store.DelayMinutes.ToString(),
                         "rescueDeaths" => _store.DeathsBeforeRescue.ToString(),
+                        "helperDeathsWithoutKill" => _store.HelperDeathsWithoutKill.ToString(),
+                        "holdLimitMinutes" => _store.HoldLimitMinutes.ToString(),
+                        "useBossLoadout" => _store.UseBossLoadout,
                         _ => ItemValue(item) ?? ""
                     };
                     if (Equals(ItemValue(item), wanted) || ItemValue(item)?.ToString() == wanted.ToString()) continue;
@@ -66,6 +74,7 @@ internal sealed class RescueControls : IDisposable
             }
             finally { _updating = false; }
             _seenDelay = _store.DelayMinutes; _seenDeaths = _store.DeathsBeforeRescue;
+            _seenHelperDeaths = _store.HelperDeathsWithoutKill; _seenHold = _store.HoldLimitMinutes; _seenBoss = _store.UseBossLoadout;
         }
     }
     internal void Show()
@@ -82,28 +91,57 @@ internal sealed class RescueControls : IDisposable
             if (container is null) throw new InvalidOperationException("This client cannot create rescue controls.");
             container.Options.Add(Opt.SharedBool("rescueAlliesShared", "Rescue Allies - all accounts",
                 "Changes apply immediately across updated Watch Dog and VibeSkuffle clients on this PC.", false));
-            container.Options.Add(Opt.SharedBool("allowRescueThisAccount", "Allow this account to rescue",
-                "Saved for this logged-in account. Excluding it only prevents helping; it can still receive help. Idle accounts can rescue too.", true));
             container.SetDefaults();
             foreach (IOption option in container.Options)
-                container.OptionValues[option] = (option.Name == "rescueAlliesShared" ? _store.Enabled : _store.IsAllowed(_account())).ToString();
+                container.OptionValues[option] = _store.Enabled.ToString();
             Type? vmType = AppDomain.CurrentDomain.GetAssemblies().SelectMany(Types)
                 .FirstOrDefault(t => t.Name == "OptionContainerViewModel" && t.GetConstructor([typeof(IOptionContainer)]) is not null);
             if (vmType is null) throw new InvalidOperationException("This client does not expose its native option controls.");
             _dialog = Activator.CreateInstance(vmType, container)!;
-            var timing = Activator.CreateInstance(current.GetType(), _dialogs) as IOptionContainer
+            IOptionContainer CreateOptions() => Activator.CreateInstance(current.GetType(), _dialogs) as IOptionContainer
                 ?? throw new InvalidOperationException("This client cannot create rescue settings.");
+            var timing = CreateOptions();
             timing.Options.Add(Opt.SharedInt("rescueDelayMinutes", "Rescue delay (minutes, 1–120)",
                 "Request help after this long without a kill, starting at the first death (at least two deaths required). Either this timer OR the death count triggers rescue. Changes apply immediately on this PC.", 15));
             timing.Options.Add(Opt.SharedInt("rescueDeaths", "Deaths before requesting rescue (1–100)",
-                "Consecutive deaths without a kill. A kill resets both thresholds. Defaults: 15 minutes or 10 deaths. Whole numbers only; invalid input is not saved. Existing rescue calls continue until a kill or a normal stop condition.", 10));
+                "Consecutive deaths without a kill. A kill resets the requester's streak. Defaults: 15 minutes or 10 deaths. Whole numbers only; invalid input is not saved.", 10));
             timing.SetDefaults();
             foreach (IOption option in timing.Options)
-                timing.OptionValues[option] = (option.Name == "rescueDelayMinutes" ? _store.DelayMinutes : _store.DeathsBeforeRescue).ToString();
+            {
+                object optionValue = option.Name switch
+                {
+                    "rescueDelayMinutes" => (object)_store.DelayMinutes,
+                    "rescueDeaths" => _store.DeathsBeforeRescue,
+                    _ => _store.Enabled
+                };
+                timing.OptionValues[option] = optionValue.ToString() ?? "";
+            }
             _settingsDialog = Activator.CreateInstance(vmType, timing)!;
+            var helperSettings = CreateOptions();
+            helperSettings.Options.Add(Opt.SharedInt("helperDeathsWithoutKill", "Helper deaths without a kill (1–100)",
+                "Stop helping after this many consecutive deaths without a kill. Default: 5. Changes apply to active rescues.", 5));
+            helperSettings.Options.Add(Opt.SharedInt("holdLimitMinutes", "Release helpers after (minutes, 0 = no limit)",
+                "Helpers normally stay until the requester leaves the map. This releases them after this many minutes without a kill or death. Default: 30.", 30));
+            helperSettings.Options.Add(Opt.SharedBool("useBossLoadout", "Helpers use their CoreBots Boss class and gear",
+                "On (default): helpers switch to the Boss class, skill mode and gear of their CoreBots options and restore their own setup afterwards. Off: they help with whatever they have equipped.", true));
+            helperSettings.SetDefaults();
+            foreach (IOption option in helperSettings.Options)
+                helperSettings.OptionValues[option] = option.Name switch
+                {
+                    "holdLimitMinutes" => _store.HoldLimitMinutes.ToString(),
+                    "useBossLoadout" => _store.UseBossLoadout.ToString(),
+                    _ => _store.HelperDeathsWithoutKill.ToString()
+                };
+            _helperSettingsDialog = Activator.CreateInstance(vmType, helperSettings)!;
             _seenDelay = _store.DelayMinutes; _seenDeaths = _store.DeathsBeforeRescue;
+            _seenHelperDeaths = _store.HelperDeathsWithoutKill; _seenHold = _store.HoldLimitMinutes; _seenBoss = _store.UseBossLoadout;
             foreach (var item in DialogItems()) ((INotifyPropertyChanged)item).PropertyChanged += OnEdited;
-            try { _window = RescueTabbedWindow.Show(_dialog, _settingsDialog, CloseWindow); return; }
+            try { _window = RescueTabbedWindow.Show(_dialog, _settingsDialog, _helperSettingsDialog,
+                () => RescueAccountHub.ReadAccounts(),
+                _account,
+                account => account.Equals(_account(), StringComparison.OrdinalIgnoreCase)
+                    ? _requestHelp() : RescueAccountHub.RequestManualHelp(account),
+                () => Log.ReadRecent(), Log.Start, Log.Stop, Log.Clear, CloseWindow); return; }
             catch (InvalidOperationException) { } // Headless/older hosts retain their native option dialog fallback.
             typeof(IDialogService).GetMethods().Single(m => m.Name == "ShowDialog" && m.IsGenericMethodDefinition
                 && m.GetParameters().Length == 2 && m.GetParameters()[1].ParameterType == typeof(string))
@@ -111,8 +149,16 @@ internal sealed class RescueControls : IDisposable
             typeof(IDialogService).GetMethods().Single(m => m.Name == "ShowDialog" && m.IsGenericMethodDefinition
                 && m.GetParameters().Length == 2 && m.GetParameters()[1].ParameterType == typeof(string))
                 .MakeGenericMethod(vmType).Invoke(_dialogs, [_settingsDialog, "Rescue Settings - changes apply immediately"]);
+            typeof(IDialogService).GetMethods().Single(m => m.Name == "ShowDialog" && m.IsGenericMethodDefinition
+                && m.GetParameters().Length == 2 && m.GetParameters()[1].ParameterType == typeof(string))
+                .MakeGenericMethod(vmType).Invoke(_dialogs, [_helperSettingsDialog, "Helper Rules - changes apply immediately"]);
         }
-        catch (Exception ex) { _dialogs.ShowMessageBox(ex.Message, "Rescue Allies"); }
+        catch (Exception ex)
+        {
+            // Preserve the reflection failure details; a message-only null reference is not actionable.
+            Log.Write("?", " Rescue Allies window failed: " + ex);
+            _dialogs.ShowMessageBox(ex.ToString(), "Rescue Allies");
+        }
         finally
         {
             if (_window is null) CloseWindow();
@@ -121,9 +167,9 @@ internal sealed class RescueControls : IDisposable
     private void CloseWindow()
     {
         foreach (var item in DialogItems()) ((INotifyPropertyChanged)item).PropertyChanged -= OnEdited;
-        _dialog = null; _settingsDialog = null; _window = null;
+        _dialog = null; _settingsDialog = null; _helperSettingsDialog = null; _window = null;
     }
-    private IEnumerable<object> DialogItems() => new[] { _dialog, _settingsDialog }.Where(m => m is not null)
+    private IEnumerable<object> DialogItems() => new[] { _dialog, _settingsDialog, _helperSettingsDialog }.Where(m => m is not null)
         .SelectMany(m => m!.GetType().GetProperty("Options")?.GetValue(m) is IEnumerable items ? items.Cast<object>() : []);
     private static IOption? ItemOption(object item) => item.GetType().GetProperty("Option")?.GetValue(item) as IOption;
     private static object? ItemValue(object item) => item.GetType().GetProperty("Value")?.GetValue(item);
@@ -141,11 +187,13 @@ internal sealed class RescueControls : IDisposable
             string? name = ItemOption(item)?.Name;
             bool value = ItemValue(item) is bool b && b;
             if (name == "rescueAlliesShared") _store.SetEnabled(value);
-            else if (name == "allowRescueThisAccount" && _account() is { Length: > 0 } account) _store.SetAllowed(account, value);
+            else if (name == "useBossLoadout") _store.SetUseBossLoadout(value);
             else if (int.TryParse(ItemValue(item)?.ToString(), out int number))
             {
                 if (name == "rescueDelayMinutes" && number is >= 1 and <= 120) _store.SetDelayMinutes(number);
                 else if (name == "rescueDeaths" && number is >= 1 and <= 100) _store.SetDeathsBeforeRescue(number);
+                else if (name == "helperDeathsWithoutKill" && number is >= 1 and <= 100) _store.SetHelperDeathsWithoutKill(number);
+                else if (name == "holdLimitMinutes" && number is >= 0 and <= 240) _store.SetHoldLimitMinutes(number);
             }
         }
         catch (Exception ex) { _dialogs?.ShowMessageBox(ex.Message, "Rescue Settings"); }

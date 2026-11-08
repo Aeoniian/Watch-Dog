@@ -8,7 +8,8 @@ namespace WatchDog.Shared;
 internal sealed class SharedRescueSettings : IDisposable
 {
     internal sealed record State(bool Enabled, string[] ExcludedAccounts, long Revision,
-        int DelayMinutes = 15, int DeathsBeforeRescue = 10);
+        int DelayMinutes = 15, int DeathsBeforeRescue = 10, bool CooldownEnabled = true, int CooldownMinutes = 10,
+        int HelperDeathsWithoutKill = 5, int HoldLimitMinutes = 30, bool UseBossLoadout = true);
     private static readonly Lazy<SharedRescueSettings> Default = new(() => new(DefaultPath));
     internal static SharedRescueSettings Instance => Default.Value;
     internal static string DefaultPath => Path.Combine(
@@ -40,6 +41,19 @@ internal sealed class SharedRescueSettings : IDisposable
     internal bool Enabled { get { lock (_gate) return _state.Enabled; } }
     internal int DelayMinutes { get { lock (_gate) return _state.DelayMinutes; } }
     internal int DeathsBeforeRescue { get { lock (_gate) return _state.DeathsBeforeRescue; } }
+    internal int CooldownMinutes { get { lock (_gate) return _state.CooldownMinutes; } }
+    internal bool CooldownEnabled { get { lock (_gate) return _state.CooldownEnabled; } }
+    internal int HelperDeathsWithoutKill { get { lock (_gate) return _state.HelperDeathsWithoutKill; } }
+    /// <summary>Helpers are released after this many minutes without a kill or death of the caller (0 = never; the caller leaving the map always releases them).</summary>
+    internal int HoldLimitMinutes { get { lock (_gate) return _state.HoldLimitMinutes; } }
+    /// <summary>Helpers switch to the CoreBots Boss class and gear (default on).</summary>
+    internal bool UseBossLoadout { get { lock (_gate) return _state.UseBossLoadout; } }
+    internal void SetHoldLimitMinutes(int value)
+    {
+        if (value is < 0 or > 240) throw new ArgumentOutOfRangeException(nameof(value), "Use 0 to 240 minutes (0 = no limit).");
+        Update(s => s with { HoldLimitMinutes = value });
+    }
+    internal void SetUseBossLoadout(bool value) => Update(s => s with { UseBossLoadout = value });
     internal void SetDelayMinutes(int value)
     {
         if (value is < 1 or > 120) throw new ArgumentOutOfRangeException(nameof(value), "Use 1 to 120 minutes.");
@@ -49,6 +63,17 @@ internal sealed class SharedRescueSettings : IDisposable
     {
         if (value is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(value), "Use 1 to 100 deaths.");
         Update(s => s with { DeathsBeforeRescue = value });
+    }
+    internal void SetCooldownMinutes(int value)
+    {
+        if (value is < 1 or > 30) throw new ArgumentOutOfRangeException(nameof(value), "Use 1 to 30 minutes.");
+        Update(s => s with { CooldownMinutes = value });
+    }
+    internal void SetCooldownEnabled(bool value) => Update(s => s with { CooldownEnabled = value });
+    internal void SetHelperDeathsWithoutKill(int value)
+    {
+        if (value is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(value), "Use 1 to 100 deaths.");
+        Update(s => s with { HelperDeathsWithoutKill = value });
     }
     // Either threshold requests help. The timed path still requires repeated deaths without a kill.
     internal bool ShouldRequest(int deaths, int elapsedMilliseconds)
@@ -78,7 +103,10 @@ internal sealed class SharedRescueSettings : IDisposable
         return state with {
             ExcludedAccounts = (state.ExcludedAccounts ?? []).Where(a => !string.IsNullOrWhiteSpace(a)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             DelayMinutes = state.DelayMinutes is >= 1 and <= 120 ? state.DelayMinutes : 15,
-            DeathsBeforeRescue = state.DeathsBeforeRescue is >= 1 and <= 100 ? state.DeathsBeforeRescue : 10
+            DeathsBeforeRescue = state.DeathsBeforeRescue is >= 1 and <= 100 ? state.DeathsBeforeRescue : 10,
+            CooldownMinutes = state.CooldownMinutes is >= 1 and <= 30 ? state.CooldownMinutes : 10,
+            HelperDeathsWithoutKill = state.HelperDeathsWithoutKill is >= 1 and <= 100 ? state.HelperDeathsWithoutKill : 5,
+            HoldLimitMinutes = state.HoldLimitMinutes is >= 0 and <= 240 ? state.HoldLimitMinutes : 30
         };
     }
     private void Update(Func<State, State> change)
@@ -104,6 +132,9 @@ internal sealed class SharedRescueSettings : IDisposable
     }
     private static bool Same(State a, State b) => a.Enabled == b.Enabled &&
         a.DelayMinutes == b.DelayMinutes && a.DeathsBeforeRescue == b.DeathsBeforeRescue &&
+        a.CooldownEnabled == b.CooldownEnabled && a.CooldownMinutes == b.CooldownMinutes &&
+        a.HelperDeathsWithoutKill == b.HelperDeathsWithoutKill &&
+        a.HoldLimitMinutes == b.HoldLimitMinutes && a.UseBossLoadout == b.UseBossLoadout &&
         a.ExcludedAccounts.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).SequenceEqual(
             b.ExcludedAccounts.OrderBy(x => x, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
     private void OnFileChanged(object sender, FileSystemEventArgs args) => Reload();

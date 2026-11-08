@@ -45,7 +45,6 @@ public class WatchDogPlugin : ISkuaPlugin
     private Watchdog? _watchdog;
     private IPluginHelper? _helper;
     private RescueControls? _rescueControls;
-    private const string LogButton = "Watch Dog log";
 
     public void Load(IServiceProvider provider, IPluginHelper helper)
     {
@@ -68,30 +67,18 @@ public class WatchDogPlugin : ISkuaPlugin
         _watchdog = new Watchdog(bot, manager, dispatcher, () => plugins?.GetContainer(this)?.OptionContainer);
         _rescueControls = new RescueControls(() => plugins?.GetContainer(this)?.OptionContainer,
             () => bot.Player.LoggedIn ? bot.Player.Username ?? "" : "",
+            () => _watchdog?.RequestManualRescue() ?? "Watch Dog is unavailable.",
             provider.GetService(typeof(IDialogService)) as IDialogService, dispatcher);
         try { helper.AddMenuButton("Rescue Allies", () => _rescueControls?.Show()); } catch { }
         _watchdog.Start();
-        try { helper.AddMenuButton(LogButton, OpenLog); } catch { }
     }
 
     public void Unload()
     {
-        try { _helper?.RemoveMenuButton(LogButton); } catch { }
         try { _helper?.RemoveMenuButton("Rescue Allies"); } catch { }
         _rescueControls?.Dispose(); _rescueControls = null;
         _watchdog?.Stop();
         _watchdog = null;
-    }
-
-    private static void OpenLog()
-    {
-        try
-        {
-            if (!File.Exists(Log.FilePath))
-                Log.Write("?", " log opened.");
-            Process.Start(new ProcessStartInfo(Log.FilePath) { UseShellExecute = true });
-        }
-        catch { }
     }
 
     /// <summary>VibeSkuffle (VibeSkua on Ruffle) has its own built-in watchdog; running both would double up.</summary>
@@ -147,6 +134,8 @@ internal sealed class Opt : IOption
 internal static class Log
 {
     private static readonly object Lock = new();
+    private static string PausedPath => FilePath + ".paused";
+    public static bool IsRunning => !File.Exists(PausedPath);
 
     public static string FilePath
     {
@@ -160,6 +149,7 @@ internal static class Log
 
     public static void Write(string who, string message)
     {
+        if (!IsRunning) return;
         string line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{who}]{message}{Environment.NewLine}";
         // Several clients share this file: open it shared and retry briefly if another one is writing.
         for (int i = 0; i < 5; i++)
@@ -188,6 +178,53 @@ internal static class Log
             {
                 return;
             }
+        }
+    }
+
+    public static void Start()
+    {
+        try { File.Delete(PausedPath); } catch { }
+        Write("?", " logging started.");
+    }
+
+    public static void Stop()
+    {
+        Write("?", " logging stopped.");
+        try { File.WriteAllText(PausedPath, "stopped", System.Text.Encoding.UTF8); } catch { }
+    }
+
+    public static void Clear()
+    {
+        try
+        {
+            lock (Lock) File.WriteAllText(FilePath, "", new System.Text.UTF8Encoding(false));
+        }
+        catch { }
+    }
+
+    public static string ReadRecent(int maxLines = 300)
+    {
+        try
+        {
+            string path = FilePath;
+            if (!File.Exists(path)) return "No log entries yet.";
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            const int maxBytes = 128 * 1024;
+            bool truncated = fs.Length > maxBytes;
+            if (truncated) fs.Seek(-maxBytes, SeekOrigin.End);
+            using var reader = new StreamReader(fs, System.Text.Encoding.UTF8);
+            string content = reader.ReadToEnd();
+            if (truncated && content.Length > 0)
+            {
+                int firstLine = content.IndexOf('\n');
+                content = firstLine >= 0 ? content[(firstLine + 1)..] : content;
+            }
+            string[] lines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+            return lines.Length <= maxLines ? string.Join(Environment.NewLine, lines) : string.Join(Environment.NewLine, lines[^maxLines..]);
+        }
+        catch (Exception ex)
+        {
+            return $"Couldn't read the log: {ex.Message}";
         }
     }
 }
