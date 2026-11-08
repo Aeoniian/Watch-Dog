@@ -229,6 +229,95 @@ internal sealed partial class Watchdog
     private int _stuckCheckAt, _stuckSince, _lastStuckRelog;
     private string _stuckSignature = "";
 
+
+    // ---- An empty room -------------------------------------------------------------------------------------
+    // A rare AQW load glitch (usually a join sent right after another action: "Please slow down. Last action was too
+    // soon!"): the character is in the right room but the room never loads, with no monsters, no NPCs and no avatar, so a
+    // script farms nothing for hours. Jumping to the current cell by hand fixes it. When the character stays "not loaded"
+    // for SECONDS while a script runs, jump to the current cell, and if that does not help, join the room again (3 tries,
+    // then it only says so). Off with SECONDS = 0.
+
+    private int _emptySince;
+    private int _emptyFixes;
+    private int _emptyLastFix;
+    private int _emptyCheckAt;
+    private bool _emptyGaveUp;
+
+    private void CheckEmptyRoom(int now)
+    {
+        if (now - _emptyCheckAt < 5000)
+            return;
+        _emptyCheckAt = now;
+        int seconds = Opt("emptyRoomSeconds", 90);
+        if (seconds <= 0 || !_manager.ScriptRunning || RescueActive || _busy)
+        {
+            _emptySince = 0;
+            return;
+        }
+        string room, cell, pad;
+        bool loaded, noMonsters;
+        try
+        {
+            loaded = _bot.Player.Loaded;
+            room = _bot.Map.FullName;
+            cell = _bot.Player.Cell;
+            pad = _bot.Player.Pad;
+            noMonsters = !(_bot.Monsters.MapMonsters?.Count > 0);
+        }
+        catch
+        {
+            return;
+        }
+        if (loaded || string.IsNullOrWhiteSpace(room))
+        {
+            _emptySince = 0;
+            _emptyFixes = 0;
+            _emptyGaveUp = false;
+            return;
+        }
+        if (_emptySince == 0)
+        {
+            _emptySince = now | 1;
+            return;
+        }
+        if (unchecked(now - _emptySince) < seconds * 1000)
+            return;
+        if (_emptyLastFix != 0 && unchecked(now - _emptyLastFix) < seconds * 1000)
+            return;
+        if (_emptyFixes >= 3)
+        {
+            if (!_emptyGaveUp)
+            {
+                _emptyGaveUp = true;
+                Write($" still not loaded in {room} after {_emptyFixes} fixes; leaving it to the script.");
+            }
+            return;
+        }
+        _emptyFixes++;
+        _emptyLastFix = now | 1;
+        int attempt = _emptyFixes;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (attempt == 1 || !noMonsters)
+                {
+                    Write($" the room {room} has not loaded for {seconds} seconds (no avatar, no monsters); jumping to the current cell ({cell}).");
+                    _bot.Map.Jump(cell, pad);
+                }
+                else
+                {
+                    Write($" {room} still has not loaded; joining it again.");
+                    _bot.Map.Join(room, string.IsNullOrWhiteSpace(cell) ? "Enter" : cell, string.IsNullOrWhiteSpace(pad) ? "Spawn" : pad, true);
+                }
+            }
+            catch (Exception ex)
+            {
+                Write($" couldn't fix the empty room: {ex.Message}");
+            }
+        });
+    }
+
     private void CheckStuckScript(int now)
     {
         if (RescueActive) return;

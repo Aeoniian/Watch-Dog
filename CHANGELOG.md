@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.4 (2026-11-08)
+
+- **Empty room fix** (new option "Fix a room that never loaded", 90 seconds, 0 = off): a script is running but the character stays "not loaded" in its room (no avatar, no monsters; a rare AQW load glitch) for that long: jump to the current cell, then join the room again (3 tries).
+
 ## v1.0.3 (2026-11-07)
 
 - **Hold limit** (new): helpers are released after 30 minutes by default without a kill or death of the caller (0 = no limit). Shared with VibeSkuffle and the Rust client.

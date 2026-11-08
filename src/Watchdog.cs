@@ -352,6 +352,7 @@ internal sealed partial class Watchdog
 
         HookEventsIfNeeded();
         CheckStuckScript(now);
+        CheckEmptyRoom(now);
         RescueTick(now);
         RestartAfterSilentRelogin(now);
 

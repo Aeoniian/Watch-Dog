@@ -72,6 +72,10 @@ shared plugins folder, Watch Dog notices it's running inside VibeSkuffle and sta
 
 It logs back in on the **same server** the account was on (unless that server is the one that got stuck).
 
+### A room that never loads
+
+A rare AQW load glitch (often after "Please slow down. Last action was too soon!") leaves the character in the right room with nothing in it: no monsters, no NPCs, no avatar. When a script is running and the character stays "not loaded" for 90 seconds (option **Fix a room that never loaded**, 0 = off), Watch Dog jumps to the current cell, then joins the room again if that does not help (3 tries, then it only says so in its log).
+
 ### Rescue Allies (shared master off by default)
 
 Open **Plugins → Rescue Allies** for the shared live switch. Use the Accounts tab to select an account and change its helper eligibility:

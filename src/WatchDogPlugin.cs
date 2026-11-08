@@ -31,6 +31,8 @@ public class WatchDogPlugin : ISkuaPlugin
             "When that message stays on screen for 1 minute (2 with VibeSkua 2.0.7+'s own Auto Relogin on), log back in.", true),
         Opt.Int("stuckScriptMinutes", "Relog a script that does nothing (minutes, 0 = off)",
             "A running script with no kills, drops, quest turn-ins/accepts, gold changes or movement for this long gets a relog (at most once every 20 minutes).", 15),
+        Opt.Int("emptyRoomSeconds", "Fix a room that never loaded (seconds, 0 = off)",
+            "A script is running but the character is not loaded in its room (no avatar, no monsters, a rare AQW load glitch) for this long: jump to the current cell, then join the room again (3 tries). Default 90.", 90),
         Opt.Bool("questErrors", "Relog on \"Missing Quest Progress\" spam",
             "AQW sometimes refuses every turn-in of a finished quest until you relog. 5 of those messages in 2 minutes (or the same quest refused 10 times) while a script runs: relog.", true),
         Opt.Bool("oneTimeQuest", "Relog on \"One Time Quest Only\" spam",
