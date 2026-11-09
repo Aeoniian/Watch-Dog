@@ -74,7 +74,7 @@ It logs back in on the **same server** the account was on (unless that server is
 
 ### A room that never loads
 
-A rare AQW load glitch (often after "Please slow down. Last action was too soon!") leaves the character in the right room with nothing in it: no monsters, no NPCs, no avatar. When a script is running and the character stays "not loaded" for 90 seconds (option **Fix a room that never loaded**, 0 = off), Watch Dog jumps to the current cell, then joins the room again if that does not help (3 tries, then it only says so in its log).
+A rare AQW load glitch (often after "Please slow down. Last action was too soon!") leaves the character in the right room with nothing in it: no monsters, no NPCs, no avatar. When a script is running and the room looks empty for 90 seconds (the map has no monsters at all, or the character is not loaded; option **Fix a room that never loaded**, 0 = off), Watch Dog jumps to the current cell, twice, and the third time joins the room again if the character is not loaded (then it only says so in its log). It logs when it first suspects an empty room.
 
 ### Rescue Allies (shared master off by default)
 

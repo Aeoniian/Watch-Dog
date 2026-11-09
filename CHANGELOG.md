@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.5 (2026-11-08)
+
+- **Empty room fix that triggers** (v1.0.4 did not for the reported case): a map with no monsters at all now also counts as an empty room, not only a character that is not loaded. After the configured time (90 seconds) with a script running, Watch Dog jumps to the current cell, twice, and the third time rejoins the room if the character is not loaded. It logs when it first suspects an empty room. Reported with a video by Ramon Douglas.
+
 ## v1.0.4 (2026-11-08)
 
 - **Empty room fix** (new option "Fix a room that never loaded", 90 seconds, 0 = off): a script is running but the character stays "not loaded" in its room (no avatar, no monsters; a rare AQW load glitch) for that long: jump to the current cell, then join the room again (3 tries).

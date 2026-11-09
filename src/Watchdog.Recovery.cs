@@ -233,9 +233,9 @@ internal sealed partial class Watchdog
     // ---- An empty room -------------------------------------------------------------------------------------
     // A rare AQW load glitch (usually a join sent right after another action: "Please slow down. Last action was too
     // soon!"): the character is in the right room but the room never loads, with no monsters, no NPCs and no avatar, so a
-    // script farms nothing for hours. Jumping to the current cell by hand fixes it. When the character stays "not loaded"
-    // for SECONDS while a script runs, jump to the current cell, and if that does not help, join the room again (3 tries,
-    // then it only says so). Off with SECONDS = 0.
+    // script farms nothing for hours. Jumping to the current cell by hand fixes it. When the room looks empty (the map has no
+    // monsters at all, or the character is not loaded) for SECONDS while a script runs, jump to the current cell, twice; the
+    // third time join the room again when the character is not loaded (3 tries, then it only says so). Off with SECONDS = 0.
 
     private int _emptySince;
     private int _emptyFixes;
@@ -256,19 +256,21 @@ internal sealed partial class Watchdog
         }
         string room, cell, pad;
         bool loaded, noMonsters;
+        int monsterCount;
         try
         {
             loaded = _bot.Player.Loaded;
             room = _bot.Map.FullName;
             cell = _bot.Player.Cell;
             pad = _bot.Player.Pad;
-            noMonsters = !(_bot.Monsters.MapMonsters?.Count > 0);
+            monsterCount = _bot.Monsters.MapMonsters?.Count ?? 0;
+            noMonsters = monsterCount == 0;
         }
         catch
         {
             return;
         }
-        if (loaded || string.IsNullOrWhiteSpace(room))
+        if ((loaded && !noMonsters) || string.IsNullOrWhiteSpace(room))
         {
             _emptySince = 0;
             _emptyFixes = 0;
@@ -278,6 +280,7 @@ internal sealed partial class Watchdog
         if (_emptySince == 0)
         {
             _emptySince = now | 1;
+            Write($" {room} looks empty (monsters in the map: {monsterCount}, character loaded: {loaded}); if it stays that way for {seconds} seconds the Watch Dog jumps to the current cell.");
             return;
         }
         if (unchecked(now - _emptySince) < seconds * 1000)
@@ -289,7 +292,7 @@ internal sealed partial class Watchdog
             if (!_emptyGaveUp)
             {
                 _emptyGaveUp = true;
-                Write($" still not loaded in {room} after {_emptyFixes} fixes; leaving it to the script.");
+                Write($" still empty in {room} after {_emptyFixes} fixes; leaving it to the script.");
             }
             return;
         }
@@ -300,9 +303,9 @@ internal sealed partial class Watchdog
         {
             try
             {
-                if (attempt == 1 || !noMonsters)
+                if (attempt < 3 || loaded)
                 {
-                    Write($" the room {room} has not loaded for {seconds} seconds (no avatar, no monsters); jumping to the current cell ({cell}).");
+                    Write($" the room {room} has looked empty for {seconds} seconds (monsters: {monsterCount}, loaded: {loaded}); jumping to the current cell ({cell}).");
                     _bot.Map.Jump(cell, pad);
                 }
                 else
